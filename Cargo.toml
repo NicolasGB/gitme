@@ -1,0 +1,17 @@
+[package]
+name = "gitme"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = { version = "4.5.34", features = ["derive"] }
+dirs = "6"
+octocrab = "0.44"
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+toml = "0.8"
+color-eyre = "0.6"
+ratatui = { version = "0.29", features = [] }
+crossterm = { version = "0.28", features = ["event-stream"] }
+tokio-stream = "0.1"
+open = "5"
