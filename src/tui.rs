@@ -54,16 +54,11 @@ impl App {
     }
 
     fn draw(&self, frame: &mut Frame) {
-        let vertical = Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Fill(1),
-            // Constraint::Fill(1),
-        ]);
+        let vertical = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]);
         let [title_area, body_area] = vertical.areas(frame.area());
         let title = Line::from("GitMe PR").centered().bold();
         frame.render_widget(title, title_area);
         frame.render_widget(&self.pull_requests, body_area);
-        // frame.render_widget(widget, area);
     }
 
     async fn handle_event(&mut self, event: &Event) {
@@ -74,6 +69,7 @@ impl App {
                     KeyCode::Char('j') | KeyCode::Down => self.pull_requests.scroll_down(),
                     KeyCode::Char('k') | KeyCode::Up => self.pull_requests.scroll_up(),
                     KeyCode::Char('o') => self.pull_requests.open(),
+                    KeyCode::Enter => self.pull_requests.toggle_expand(),
                     _ => {}
                 }
             }
