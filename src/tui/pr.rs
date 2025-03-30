@@ -236,11 +236,13 @@ impl PullRequestWidget {
     }
 
     pub fn open(&self) {
-        let lock = self.state.write().unwrap();
-        if let Some(selected) = lock.prs.table_state.selected() {
-            // Safe to unwrap since it won't fail
-            // let pr = lock.prs.grouped_prs.get(selected).unwrap();
-            // open::that(&pr.url).unwrap();
+        let state = self.state.write().unwrap();
+        if let Some(index) = state.prs.table_state.selected() {
+            if let Some(pr) =
+                self.find_by_index(&state.prs.grouped_prs, &state.prs.expanded_repos, index)
+            {
+                open::that(&pr.url).unwrap();
+            }
         }
     }
 
