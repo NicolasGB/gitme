@@ -1,4 +1,7 @@
-use std::sync::{Arc, RwLock};
+use std::{
+    collections::HashSet,
+    sync::{Arc, RwLock},
+};
 
 use octocrab::{
     Page,
@@ -147,11 +150,28 @@ impl PullRequestWidget {
 
     pub fn scroll_down(&self) {
         let mut state = self.state.write().unwrap();
-        state.prs.table_state.scroll_down_by(1);
+
+        // For some reason it's overflowing and returning an index that doesn't exist when we go
+        // down as the last element so we do it manually
+        // Calculate total number of visible rows
+        let total_rows = state.prs.grouped_prs.iter().fold(0, |acc, (repo, prs)| {
+            acc + 1
+                + if state.prs.expanded_repos.contains(repo) {
+                    prs.len()
+                } else {
+                    0
+                }
+        });
+
+        let current = state.prs.table_state.selected().unwrap_or(0);
+        if current + 1 < total_rows {
+            state.prs.table_state.scroll_down_by(1);
+        }
 
         // If a pr is selected make it available in the details
         if let Some(index) = state.prs.table_state.selected() {
-            state.details.pr_details = self.find_by_index(&state.prs.grouped_prs, index)
+            state.details.pr_details =
+                self.find_by_index(&state.prs.grouped_prs, &state.prs.expanded_repos, index);
         }
     }
 
@@ -160,7 +180,8 @@ impl PullRequestWidget {
         state.prs.table_state.scroll_up_by(1);
         // If a pr is selected make it available in the details
         if let Some(index) = state.prs.table_state.selected() {
-            state.details.pr_details = self.find_by_index(&state.prs.grouped_prs, index)
+            state.details.pr_details =
+                self.find_by_index(&state.prs.grouped_prs, &state.prs.expanded_repos, index)
         }
     }
 
@@ -227,24 +248,28 @@ impl PullRequestWidget {
     fn find_by_index(
         &self,
         grouped_prs: &std::collections::BTreeMap<String, Vec<PullRequest>>,
+        expanded_repos: &HashSet<String>,
         index: usize,
     ) -> Option<PullRequest> {
         let mut current_index = 0;
 
-        for (_, prs) in grouped_prs.iter() {
+        for (repo, prs) in grouped_prs.iter() {
             if current_index == index {
                 // Here we're returning none, since it matches a header row
-                break;
+                return None;
             }
             // Increment for the header row of the group
             current_index += 1;
 
-            for pr in prs.iter() {
-                if index == current_index {
-                    return Some(pr.clone());
+            // If the repo is expanded search in it otherwise skip
+            if expanded_repos.contains(repo) {
+                for pr in prs.iter() {
+                    if index == current_index {
+                        return Some(pr.clone());
+                    }
+                    // Increment the just seen pr
+                    current_index += 1;
                 }
-                // Increment the just seen pr
-                current_index += 1;
             }
         }
         None
