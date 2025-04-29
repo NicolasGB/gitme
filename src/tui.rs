@@ -65,16 +65,25 @@ impl App {
         if let Event::Key(key) = event {
             if key.kind == KeyEventKind::Press {
                 match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
+                    KeyCode::Char('q') => self.should_quit = true,
                     KeyCode::Char('j') | KeyCode::Down => self.pull_requests.scroll_down(),
                     KeyCode::Char('k') | KeyCode::Up => self.pull_requests.scroll_up(),
                     KeyCode::Char('o') => self.pull_requests.open(),
                     KeyCode::Char('r') => self.pull_requests.review(),
                     KeyCode::Char('z') => self.pull_requests.expand_all(),
                     KeyCode::Char('c') => self.pull_requests.contract_all(),
-                    KeyCode::Char('?') => self.pull_requests.toggle_help(),
                     KeyCode::Enter => self.pull_requests.toggle_expand(),
                     KeyCode::Tab => self.pull_requests.next_tab(),
+                    KeyCode::Char('?') => {
+                        if !self.pull_requests.help_open() {
+                            self.pull_requests.toggle_help()
+                        }
+                    }
+                    KeyCode::Esc => {
+                        if self.pull_requests.help_open() {
+                            self.pull_requests.toggle_help()
+                        }
+                    }
                     _ => {}
                 }
             }

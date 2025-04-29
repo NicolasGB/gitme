@@ -70,13 +70,32 @@ enum LoadingState {
     Error(String),
 }
 
-/// Helper function to create a centered rect using percentages
-fn centered_rect(area: Rect, percent_x: u16, percent_y: u16) -> Rect {
-    let vertical = Layout::vertical([Constraint::Percentage(percent_y)]).flex(Flex::Center);
-    let horizontal = Layout::horizontal([Constraint::Percentage(percent_x)]).flex(Flex::Center);
-    let [area] = vertical.areas(area);
-    let [area] = horizontal.areas(area);
-    area
+/// Helper function to create a centered rect using percentages.
+/// Ensures the rectangle has a minimum size, taking up more relative space
+/// if the provided area is small.
+fn centered_rect(
+    area: Rect,
+    percent_x: u16,
+    percent_y: u16,
+    min_width: u16,
+    min_height: u16,
+) -> Rect {
+    // Determine the final dimensions, ensuring they are at least the minimum
+    // and do not exceed the available area dimensions.
+    let target_width = (area.width as f32 * percent_x as f32 / 100.0) as u16;
+    let target_height = (area.height as f32 * percent_y as f32 / 100.0) as u16;
+
+    let final_width = target_width.max(min_width).min(area.width);
+    let final_height = target_height.max(min_height).min(area.height);
+
+    let vertical_layout = Layout::vertical([Constraint::Length(final_height)]).flex(Flex::Center);
+    let horizontal_layout =
+        Layout::horizontal([Constraint::Length(final_width)]).flex(Flex::Center);
+
+    let [centered_vertically] = vertical_layout.areas(area);
+    let [final_area] = horizontal_layout.areas(centered_vertically);
+
+    final_area
 }
 
 const KEYBINDINGS: &[(&str, &str)] = &[
@@ -312,6 +331,10 @@ impl PullRequestWidget {
         let mut state = self.state.write().unwrap();
         state.show_help = !state.show_help
     }
+
+    pub fn help_open(&self) -> bool {
+        self.state.read().unwrap().show_help
+    }
 }
 
 impl Widget for &PullRequestWidget {
@@ -443,10 +466,10 @@ impl Widget for &PullRequestWidget {
                 ])
             });
 
-            let area = centered_rect(area, 20, 15);
+            let area = centered_rect(area, 20, 15, 20, 10);
             let popup_block = Block::default()
                 .title(" Keybindings ")
-                .title_bottom(" ? again to close ")
+                .title_bottom(" Esc to close ")
                 .borders(ratatui::widgets::Borders::ALL)
                 .border_style(Style::default().fg(Color::LightCyan));
 
@@ -475,7 +498,7 @@ impl Widget for &PullRequestWidget {
                 .centered()
                 .wrap(Wrap { trim: true });
 
-            let area = centered_rect(area, 30, 20);
+            let area = centered_rect(area, 30, 20, 30, 10);
             // Clear the area before drawing the popup
             ratatui::widgets::Clear.render(area, buf);
             error_paragraph.render(area, buf);
