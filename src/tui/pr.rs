@@ -12,10 +12,10 @@ use octocrab::{
 use pr_list_state::PullRequestsListState;
 use ratatui::{
     buffer::Buffer,
-    layout::{Constraint, Layout, Rect},
+    layout::{Constraint, Flex, Layout, Rect},
     style::{Color, Style, Stylize},
     text::Line,
-    widgets::{Block, Paragraph, Row, StatefulWidget, Table, Widget, Wrap},
+    widgets::{Block, Cell, Paragraph, Row, StatefulWidget, Table, Widget, Wrap},
 };
 
 use crate::config::Config;
@@ -36,6 +36,7 @@ struct AppState {
     details: PullRequestsDetailsState,
 
     loading_state: LoadingState,
+    show_help: bool,
 }
 
 #[derive(Debug, Default)]
@@ -68,6 +69,26 @@ enum LoadingState {
     Loaded,
     Error(String),
 }
+
+/// Helper function to create a centered rect using percentages
+fn centered_rect(area: Rect, percent_x: u16, percent_y: u16) -> Rect {
+    let vertical = Layout::vertical([Constraint::Percentage(percent_y)]).flex(Flex::Center);
+    let horizontal = Layout::horizontal([Constraint::Percentage(percent_x)]).flex(Flex::Center);
+    let [area] = vertical.areas(area);
+    let [area] = horizontal.areas(area);
+    area
+}
+
+const KEYBINDINGS: &[(&str, &str)] = &[
+    ("↑↓, j/k", "Scroll List"),
+    ("TAB", "Switch Panel"),
+    ("Space", "Toggle Expand"), // Assuming space toggles expand based on pr_list_state
+    ("z", "Expand All"),
+    ("c", "Collapse All"),
+    ("r", "Review PR"),
+    ("o", "Open in Browser"),
+    ("q", "Quit"),
+];
 
 impl PullRequestWidget {
     pub(crate) fn new(config: Config) -> Self {
@@ -171,7 +192,13 @@ impl PullRequestWidget {
     }
 
     fn on_err(&self, err: &octocrab::Error) {
-        self.set_loading_state(LoadingState::Error(err.to_string()));
+        let error_message = match err {
+            octocrab::Error::GitHub { source, .. } => source.message.clone(),
+            // Fallback to display
+            _ => format!("{}", err),
+        };
+
+        self.set_loading_state(LoadingState::Error(error_message));
     }
 
     fn set_loading_state(&self, state: LoadingState) {
@@ -280,6 +307,11 @@ impl PullRequestWidget {
             }
         }
     }
+
+    pub fn toggle_help(&self) {
+        let mut state = self.state.write().unwrap();
+        state.show_help = !state.show_help
+    }
 }
 
 impl Widget for &PullRequestWidget {
@@ -343,13 +375,12 @@ impl Widget for &PullRequestWidget {
 
         let loading_state = match state.loading_state {
             LoadingState::Loading => String::from("Loading...").yellow(),
-            LoadingState::Error(ref e) => format!("⚠ Error: {}", e).red(),
             _ => String::from("").white(),
         };
 
         let help_line = Line::styled(
             format!(
-                "{loading_state} ↑↓,j/k to scroll • TAB to switch • r to review • o to open • z to unfold all • c to fold all • q to quit"
+                "{loading_state} Scroll: ↑↓,j/k • Switch: TAB • Review: r • Keybindings: ? • Quit: q"
             ),
             Color::Green,
         );
@@ -402,6 +433,53 @@ impl Widget for &PullRequestWidget {
         let bottom_inner = bottom_box.inner(base_layout[1]);
         bottom_box.render(base_layout[1], buf);
         help_line.render(bottom_inner, buf);
+
+        // Render help popup if required
+        if state.show_help {
+            let rows = KEYBINDINGS.iter().map(|(key, action)| {
+                Row::new(vec![
+                    Cell::from(key.to_string()).style(Style::default().fg(Color::Cyan)),
+                    Cell::from(action.to_string()).style(Style::default().fg(Color::Green)),
+                ])
+            });
+
+            let area = centered_rect(area, 20, 15);
+            let popup_block = Block::default()
+                .title(" Keybindings ")
+                .title_bottom(" ? again to close ")
+                .borders(ratatui::widgets::Borders::ALL)
+                .border_style(Style::default().fg(Color::LightCyan));
+
+            // Layout the table rows
+            let help_table = Table::new(rows, [Constraint::Length(10), Constraint::Min(15)])
+                .block(popup_block)
+                .column_spacing(2);
+
+            // Clear the area before drawing the popup
+            ratatui::widgets::Clear.render(area, buf);
+
+            // Render explicitly to avoid confusion with stateless and stateful table
+            ratatui::prelude::Widget::render(help_table, area, buf);
+        }
+
+        // Render error popup if needed
+        if let LoadingState::Error(ref err_msg) = state.loading_state {
+            let popup_block = Block::default()
+                .title(" Error ")
+                .title_bottom(" q to quit ")
+                .borders(ratatui::widgets::Borders::ALL)
+                .border_style(Style::default().fg(Color::Red));
+
+            let error_paragraph = Paragraph::new(err_msg.clone().red())
+                .block(popup_block)
+                .centered()
+                .wrap(Wrap { trim: true });
+
+            let area = centered_rect(area, 30, 20);
+            // Clear the area before drawing the popup
+            ratatui::widgets::Clear.render(area, buf);
+            error_paragraph.render(area, buf);
+        }
     }
 }
 

@@ -72,6 +72,7 @@ impl App {
                     KeyCode::Char('r') => self.pull_requests.review(),
                     KeyCode::Char('z') => self.pull_requests.expand_all(),
                     KeyCode::Char('c') => self.pull_requests.contract_all(),
+                    KeyCode::Char('?') => self.pull_requests.toggle_help(),
                     KeyCode::Enter => self.pull_requests.toggle_expand(),
                     KeyCode::Tab => self.pull_requests.next_tab(),
                     _ => {}
