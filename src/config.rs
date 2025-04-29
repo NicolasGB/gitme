@@ -8,6 +8,10 @@ use serde::{Deserialize, Serialize};
 pub struct Config {
     pub api_key: Option<String>,
     pub username: Option<String>,
+    pub command: Option<String>,
+    #[serde(default)]
+    pub command_args: Vec<String>,
+    #[serde(default)]
     pub repositories: Vec<Repositories>,
 }
 
@@ -44,6 +48,8 @@ impl Config {
                 api_key: None,
                 username: None,
                 repositories: Vec::new(),
+                command: None,
+                command_args: Vec::new(),
             };
 
             let toml = toml::to_string(&default_config).wrap_err("Failed to serialize config")?;
@@ -52,9 +58,5 @@ impl Config {
 
             Ok(default_config)
         }
-    }
-
-    pub(crate) fn add_repo(&mut self) -> Result<()> {
-        Ok(())
     }
 }

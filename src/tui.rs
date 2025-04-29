@@ -28,7 +28,7 @@ pub struct App {
 }
 
 impl App {
-    const FRAMES_PER_SECOND: f32 = 60.0;
+    const FRAMES_PER_SECOND: f32 = 30.0;
 
     pub fn new(config: Config) -> Self {
         Self {
@@ -69,7 +69,11 @@ impl App {
                     KeyCode::Char('j') | KeyCode::Down => self.pull_requests.scroll_down(),
                     KeyCode::Char('k') | KeyCode::Up => self.pull_requests.scroll_up(),
                     KeyCode::Char('o') => self.pull_requests.open(),
+                    KeyCode::Char('r') => self.pull_requests.review(),
+                    KeyCode::Char('z') => self.pull_requests.expand_all(),
+                    KeyCode::Char('c') => self.pull_requests.contract_all(),
                     KeyCode::Enter => self.pull_requests.toggle_expand(),
+                    KeyCode::Tab => self.pull_requests.next_tab(),
                     _ => {}
                 }
             }

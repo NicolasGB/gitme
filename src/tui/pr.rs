@@ -1,5 +1,7 @@
+mod pr_list_state;
+
 use std::{
-    collections::HashSet,
+    process::Command,
     sync::{Arc, RwLock},
 };
 
@@ -7,12 +9,13 @@ use octocrab::{
     Page,
     params::{Direction, State},
 };
+use pr_list_state::PullRequestsListState;
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Layout, Rect},
     style::{Color, Style, Stylize},
     text::Line,
-    widgets::{Block, Row, StatefulWidget, Table, TableState, Widget},
+    widgets::{Block, Paragraph, Row, StatefulWidget, Table, Widget, Wrap},
 };
 
 use crate::config::Config;
@@ -27,18 +30,12 @@ pub struct PullRequestWidget {
 struct AppState {
     active_panel: ActivePanel,
 
-    prs: PullRequestsListState,
+    review_prs: PullRequestsListState,
+    assignee_prs: PullRequestsListState,
 
     details: PullRequestsDetailsState,
 
     loading_state: LoadingState,
-}
-
-#[derive(Debug, Default)]
-struct PullRequestsListState {
-    grouped_prs: std::collections::BTreeMap<String, Vec<PullRequest>>,
-    expanded_repos: std::collections::HashSet<String>,
-    table_state: TableState,
 }
 
 #[derive(Debug, Default)]
@@ -53,13 +50,14 @@ struct PullRequest {
     url: String,
     repo: String,
     body: String,
+    is_draft: bool,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd)]
 enum ActivePanel {
     #[default]
-    PullRequests,
-    Details,
+    PullRequestsToReview,
+    MyPullRequests,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -106,7 +104,7 @@ impl PullRequestWidget {
     // On a load of prs received, pushes them in their corresponding map entry in the prs state
     fn on_load(&self, page: &Page<OctoPullRequest>) {
         // List the pull requests filter them by the user that has to review them
-        let prs: Vec<PullRequest> = page
+        let prs_review: Vec<PullRequest> = page
             .items
             .iter()
             // Get only prs where my review was requested
@@ -121,13 +119,27 @@ impl PullRequestWidget {
             .map(Into::into)
             .collect();
 
+        let prs_assignee: Vec<PullRequest> = page
+            .items
+            .iter()
+            .filter(|pr| {
+                if let Some(assignees) = &pr.assignees {
+                    if let Some(username) = &self.config.username {
+                        return assignees.iter().any(|e| e.login == *username);
+                    }
+                }
+                false
+            })
+            .map(Into::into)
+            .collect();
+
         let mut state = self.state.write().unwrap();
         state.loading_state = LoadingState::Loaded;
 
         // Group the prs by repository to be able to better handle them later on in a tree view
-        for pr in prs {
+        for pr in prs_review {
             state
-                .prs
+                .review_prs
                 .grouped_prs
                 .entry(pr.repo.clone())
                 .or_default()
@@ -135,8 +147,26 @@ impl PullRequestWidget {
         }
 
         // If the map is not empty, and theres not a previously selected state
-        if !state.prs.grouped_prs.is_empty() && state.prs.table_state.selected().is_none() {
-            state.prs.table_state.select(Some(0));
+        if !state.review_prs.grouped_prs.is_empty()
+            && state.review_prs.table_state.selected().is_none()
+        {
+            state.review_prs.table_state.select(Some(0));
+        }
+
+        for pr in prs_assignee {
+            state
+                .assignee_prs
+                .grouped_prs
+                .entry(pr.repo.clone())
+                .or_default()
+                .push(pr);
+        }
+
+        // If the map is not empty, and theres not a previously selected state
+        if !state.assignee_prs.grouped_prs.is_empty()
+            && state.assignee_prs.table_state.selected().is_none()
+        {
+            state.assignee_prs.table_state.select(Some(0));
         }
     }
 
@@ -150,131 +180,105 @@ impl PullRequestWidget {
 
     pub fn scroll_down(&self) {
         let mut state = self.state.write().unwrap();
-
-        // For some reason it's overflowing and returning an index that doesn't exist when we go
-        // down as the last element so we do it manually
-        // Calculate total number of visible rows
-        let total_rows = state.prs.grouped_prs.iter().fold(0, |acc, (repo, prs)| {
-            acc + 1
-                + if state.prs.expanded_repos.contains(repo) {
-                    prs.len()
-                } else {
-                    0
-                }
-        });
-
-        let current = state.prs.table_state.selected().unwrap_or(0);
-        if current + 1 < total_rows {
-            state.prs.table_state.scroll_down_by(1);
-        }
+        let prs_state = match state.active_panel {
+            ActivePanel::PullRequestsToReview => &mut state.review_prs,
+            ActivePanel::MyPullRequests => &mut state.assignee_prs,
+        };
+        prs_state.scroll_down();
 
         // If a pr is selected make it available in the details
-        if let Some(index) = state.prs.table_state.selected() {
-            state.details.pr_details =
-                self.find_by_index(&state.prs.grouped_prs, &state.prs.expanded_repos, index);
-        }
+        state.details.pr_details = prs_state.find_selected().cloned();
     }
 
     pub fn scroll_up(&self) {
         let mut state = self.state.write().unwrap();
-        state.prs.table_state.scroll_up_by(1);
-        // If a pr is selected make it available in the details
-        if let Some(index) = state.prs.table_state.selected() {
-            state.details.pr_details =
-                self.find_by_index(&state.prs.grouped_prs, &state.prs.expanded_repos, index)
-        }
+        let prs_state = match state.active_panel {
+            ActivePanel::PullRequestsToReview => &mut state.review_prs,
+            ActivePanel::MyPullRequests => &mut state.assignee_prs,
+        };
+        prs_state.scroll_up();
+
+        state.details.pr_details = prs_state.find_selected().cloned();
+    }
+
+    pub fn expand_all(&self) {
+        let mut state = self.state.write().unwrap();
+
+        let repos: Vec<String> = state.review_prs.grouped_prs.keys().cloned().collect();
+
+        repos.iter().for_each(|repo| {
+            state.review_prs.expanded_repos.insert(repo.clone());
+        });
+    }
+
+    pub fn contract_all(&self) {
+        let mut state = self.state.write().unwrap();
+
+        state.review_prs.expanded_repos.clear();
     }
 
     pub fn toggle_expand(&self) {
-        let repo_to_toggle = {
-            let state = self.state.read().unwrap();
-            // Get current row to see if it's on a group
-            let index = match state.prs.table_state.selected() {
-                Some(index) => index,
-                // Should never be here but if nothing selected, return
-                None => return,
-            };
-
-            // Now we loop through the repos to find the one that matches the index
-            let mut current_index = 0;
-            let mut repo_to_toggle = None;
-
-            for (repo, prs) in state.prs.grouped_prs.iter() {
-                if current_index == index {
-                    repo_to_toggle = Some(repo.clone());
-                    break;
-                }
-
-                // Increment for the header row of the group
-                current_index += 1;
-
-                // If the repo is expanded we need to loop through all the nested children
-                if state.prs.expanded_repos.contains(repo) {
-                    // To be smart we'll add the length, since we know how everything is formatted,
-                    // if the length > than the current index it means the current is on a pr
-                    // therefore it's not expandable
-                    current_index += prs.len();
-                    if current_index > index {
-                        return;
-                    }
-                }
-            }
-
-            repo_to_toggle
-        };
-
         let mut state = self.state.write().unwrap();
-        // If there's something to toggle
-        if let Some(repo) = repo_to_toggle {
-            // Check if it's expanded, if so remove it
-            if state.prs.expanded_repos.contains(&repo) {
-                state.prs.expanded_repos.remove(&repo);
-            } else {
-                state.prs.expanded_repos.insert(repo);
-            }
-        }
+        let prs_state = match state.active_panel {
+            ActivePanel::PullRequestsToReview => &mut state.review_prs,
+            ActivePanel::MyPullRequests => &mut state.assignee_prs,
+        };
+        prs_state.toggle_expand();
+    }
+
+    pub fn next_tab(&self) {
+        let mut state = self.state.write().unwrap();
+        state.active_panel = match &state.active_panel {
+            ActivePanel::PullRequestsToReview => ActivePanel::MyPullRequests,
+            ActivePanel::MyPullRequests => ActivePanel::PullRequestsToReview,
+        };
     }
 
     pub fn open(&self) {
-        let state = self.state.write().unwrap();
-        if let Some(index) = state.prs.table_state.selected() {
-            if let Some(pr) =
-                self.find_by_index(&state.prs.grouped_prs, &state.prs.expanded_repos, index)
-            {
-                open::that(&pr.url).unwrap();
-            }
+        let state = self.state.read().unwrap();
+        let prs_state = match state.active_panel {
+            ActivePanel::PullRequestsToReview => &state.review_prs,
+            ActivePanel::MyPullRequests => &state.assignee_prs,
+        };
+
+        if let Some(pr) = prs_state.find_selected() {
+            open::that(pr.url.clone()).unwrap();
         }
     }
 
-    // Given an index and a btreemap find the pr that matches
-    fn find_by_index(
-        &self,
-        grouped_prs: &std::collections::BTreeMap<String, Vec<PullRequest>>,
-        expanded_repos: &HashSet<String>,
-        index: usize,
-    ) -> Option<PullRequest> {
-        let mut current_index = 0;
+    pub fn review(&self) {
+        let state = self.state.read().unwrap();
 
-        for (repo, prs) in grouped_prs.iter() {
-            if current_index == index {
-                // Here we're returning none, since it matches a header row
-                return None;
-            }
-            // Increment for the header row of the group
-            current_index += 1;
+        // Only available with reviewable prs
+        if let ActivePanel::PullRequestsToReview = state.active_panel {
+            if let Some(pr) = state.review_prs.find_selected() {
+                // TODO: handle missing paths or config repo
+                if let Some(config_repo) =
+                    self.config.repositories.iter().find(|r| r.name == pr.repo)
+                {
+                    let cmd = self.config.command.clone().unwrap_or_else(|| {
+                        std::env::var("TERMINAL").unwrap_or_else(|_| "ghostty".to_string())
+                    });
 
-            // If the repo is expanded search in it otherwise skip
-            if expanded_repos.contains(repo) {
-                for pr in prs.iter() {
-                    if index == current_index {
-                        return Some(pr.clone());
+                    if let Some(path) = &config_repo.system_path {
+                        let args = self.config.command_args.clone();
+                        let path = path.clone();
+                        std::thread::spawn(move || {
+                            // First change to the target directory
+                            std::env::set_current_dir(&path).unwrap_or_else(|e| {
+                                eprintln!("Failed to change directory: {}", e);
+                            });
+
+                            let mut cmd = Command::new(cmd);
+                            for arg in args.iter() {
+                                cmd.arg(arg);
+                            }
+                            cmd.output()
+                        });
                     }
-                    // Increment the just seen pr
-                    current_index += 1;
                 }
             }
         }
-        None
     }
 }
 
@@ -290,13 +294,44 @@ impl Widget for &PullRequestWidget {
             .constraints(vec![Constraint::Percentage(40), Constraint::Percentage(60)])
             .split(base_layout[0]);
 
+        // Split the details into 3 zones, title, details, comments
+        let details_layout = Layout::default()
+            .direction(ratatui::layout::Direction::Vertical)
+            .constraints([Constraint::Max(3), Constraint::Min(10)])
+            .split(prs_layout[1]);
+
+        // Now that all the layout is ready and the blocks too, we acquire the lock
+        let mut state = self.state.write().unwrap();
+
+        // Build the text with color according to active panel
+        let review_requested = if let ActivePanel::PullRequestsToReview = state.active_panel {
+            "Review Requested".bold()
+        } else {
+            "Review Requested".dark_gray()
+        };
+
+        let my_prs = if let ActivePanel::MyPullRequests = state.active_panel {
+            "My Pull Requests ".bold()
+        } else {
+            "My Pull Requests ".dark_gray()
+        };
+
+        let title_spans = vec!["📋 ".into(), review_requested, " - ".into(), my_prs];
+        let title_line = ratatui::text::Line::from(title_spans);
+
         // Create two simple boxes to visualize the splits
-        let mut prs_block = Block::default()
-            .title("📋 Pull Requests".bold())
+        let prs_block = Block::default()
+            .title(title_line)
+            .borders(ratatui::widgets::Borders::ALL)
+            .border_style(Style::default().fg(Color::Green))
+            .border_type(ratatui::widgets::BorderType::Rounded);
+
+        let title_block = Block::default()
+            .title("Title")
             .borders(ratatui::widgets::Borders::ALL)
             .border_type(ratatui::widgets::BorderType::Rounded);
 
-        let details_box = Block::default()
+        let details_block = Block::default()
             .title("Details")
             .borders(ratatui::widgets::Borders::ALL)
             .border_type(ratatui::widgets::BorderType::Rounded);
@@ -306,14 +341,6 @@ impl Widget for &PullRequestWidget {
             .borders(ratatui::widgets::Borders::ALL)
             .border_type(ratatui::widgets::BorderType::Rounded);
 
-        // Now that all the layout is ready and the blocks too, we acquire the lock
-        let mut state = self.state.write().unwrap();
-
-        //  highlight the panel with the primary terminal color
-        if let ActivePanel::PullRequests = state.active_panel {
-            prs_block = prs_block.border_style(Style::default().fg(Color::Green));
-        }
-
         let loading_state = match state.loading_state {
             LoadingState::Loading => String::from("Loading...").yellow(),
             LoadingState::Error(ref e) => format!("⚠ Error: {}", e).red(),
@@ -321,28 +348,25 @@ impl Widget for &PullRequestWidget {
         };
 
         let help_line = Line::styled(
-            format!("{loading_state} ↑↓,j/k to scroll • TAB to switch • q to quit"),
-            Color::Gray,
+            format!(
+                "{loading_state} ↑↓,j/k to scroll • TAB to switch • r to review • o to open • z to unfold all • c to fold all • q to quit"
+            ),
+            Color::Green,
         );
 
         // Draw the table
         let columns = [Constraint::Fill(1)];
-        // Calculate the number of rows
-        let mut rows = Vec::new();
-        for (group, prs) in state.prs.grouped_prs.iter() {
-            let expanded = state.prs.expanded_repos.contains(group);
-            if expanded {
-                // Push the group
-                rows.push(Row::new([format!("▼ {} ({})", group, prs.len())]));
-                // Push all it's prs
-                prs.iter().for_each(|pr| {
-                    rows.push(Row::new([format!("    {} - {}", pr.id, pr.title)]));
-                });
-            } else {
-                // Push the group
-                rows.push(Row::new([format!("▶ {} ({})", group, prs.len())]));
+        // Based on the state render the rows and get the table state to render
+        let (rows, table_state) = match state.active_panel {
+            ActivePanel::PullRequestsToReview => {
+                let rows = PullRequest::render_table_based_on_state(&state.review_prs);
+                (rows, &mut state.review_prs.table_state)
             }
-        }
+            ActivePanel::MyPullRequests => {
+                let rows = PullRequest::render_table_based_on_state(&state.assignee_prs);
+                (rows, &mut state.assignee_prs.table_state)
+            }
+        };
 
         let table = Table::new(rows, columns)
             .block(prs_block)
@@ -353,20 +377,62 @@ impl Widget for &PullRequestWidget {
             );
 
         // Render the table as a stateful widget
-        StatefulWidget::render(table, prs_layout[0], buf, &mut state.prs.table_state);
+        StatefulWidget::render(table, prs_layout[0], buf, table_state);
 
         // If details inside, get the area and render it
         if let Some(pr_details) = &state.details.pr_details {
-            let details_inner = details_box.inner(prs_layout[1]);
-            Line::styled(&pr_details.body, Color::Gray).render(details_inner, buf);
+            // Title of the pr
+            Paragraph::new(pr_details.title.clone())
+                .block(title_block)
+                .wrap(Wrap { trim: true })
+                .render(details_layout[0], buf);
+
+            // Body of the PR
+            Paragraph::new(tui_markdown::from_str(&pr_details.body.clone()))
+                .block(details_block)
+                .wrap(Wrap { trim: true })
+                .render(details_layout[1], buf);
+        } else {
+            // Render simply the box without anything
+            title_block.render(details_layout[0], buf);
+            details_block.render(details_layout[1], buf);
         }
-        // Render always the outer box
-        details_box.render(prs_layout[1], buf);
         // Render bottom part
         // Here we get the inner of the bottom from it's layout, then we render the other two
         let bottom_inner = bottom_box.inner(base_layout[1]);
         bottom_box.render(base_layout[1], buf);
         help_line.render(bottom_inner, buf);
+    }
+}
+
+impl PullRequest {
+    fn render_table_based_on_state<'a>(
+        prs_state: &PullRequestsListState,
+    ) -> Vec<ratatui::widgets::Row<'a>> {
+        let mut rows = Vec::new();
+        for (group, prs) in prs_state.grouped_prs.iter() {
+            let expanded = prs_state.expanded_repos.contains(group);
+            if expanded {
+                rows.push(Row::new([format!("▼ {} ({})", group, prs.len())]));
+                let prs_len = prs.len();
+                prs.iter().enumerate().for_each(|(i, pr)| {
+                    let mut prefix = "├─";
+                    if i == prs_len - 1 {
+                        prefix = "└─";
+                    }
+                    rows.push(Row::new([format!(
+                        "  {} {} #{} - {}",
+                        prefix,
+                        if pr.is_draft { "📝" } else { "" },
+                        pr.id,
+                        pr.title
+                    )]));
+                });
+            } else {
+                rows.push(Row::new([format!("▶ {} ({})", group, prs.len())]));
+            }
+        }
+        rows
     }
 }
 
@@ -384,6 +450,7 @@ impl From<&OctoPullRequest> for PullRequest {
                 .unwrap_or_default(),
             repo: pr.base.repo.as_ref().unwrap().name.clone(),
             body: pr.body.as_ref().cloned().unwrap_or_default(),
+            is_draft: pr.draft.unwrap_or_default(),
         }
     }
 }
