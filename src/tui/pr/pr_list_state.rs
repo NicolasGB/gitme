@@ -1,4 +1,9 @@
-use ratatui::widgets::TableState;
+use ratatui::{
+    buffer::Buffer,
+    layout::Rect,
+    style::{Color, Style},
+    widgets::{Block, Row, StatefulWidget, Table, TableState},
+};
 
 use super::PullRequest;
 
@@ -114,5 +119,42 @@ impl PullRequestsListState {
             }
         }
         None
+    }
+
+    pub(crate) fn render_table(&mut self, block: Block, area: Rect, buf: &mut Buffer) {
+        let mut rows = Vec::new();
+        for (group, prs) in self.grouped_prs.iter() {
+            let expanded = self.expanded_repos.contains(group);
+            if expanded {
+                rows.push(Row::new([format!("▼ {} ({})", group, prs.len())]));
+                let prs_len = prs.len();
+                prs.iter().enumerate().for_each(|(i, pr)| {
+                    let mut prefix = "├─";
+                    if i == prs_len - 1 {
+                        prefix = "└─";
+                    }
+                    rows.push(Row::new([format!(
+                        "  {} {} #{} - {}",
+                        prefix,
+                        if pr.is_draft { "📝" } else { "" },
+                        pr.id,
+                        pr.title
+                    )]));
+                });
+            } else {
+                rows.push(Row::new([format!("▶ {} ({})", group, prs.len())]));
+            }
+        }
+
+        // Build the table and return it
+        let t = Table::new(rows, [ratatui::layout::Constraint::Fill(1)])
+            .block(block)
+            .row_highlight_style(
+                Style::default()
+                    .bg(Color::Rgb(76, 55, 67)) // #4c3743
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            );
+
+        StatefulWidget::render(t, area, buf, &mut self.table_state);
     }
 }
