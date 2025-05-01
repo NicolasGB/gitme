@@ -263,29 +263,26 @@ impl PullRequestWidget {
         state.details.pr_details = prs_state.find_selected().cloned();
     }
 
-    pub fn expand_all(&self) {
-        let mut state = self.state.write().unwrap();
-
-        let repos: Vec<String> = state.review_prs.grouped_prs.keys().cloned().collect();
-
-        repos.iter().for_each(|repo| {
-            state.review_prs.expanded_repos.insert(repo.clone());
-        });
-    }
-
-    pub fn contract_all(&self) {
-        let mut state = self.state.write().unwrap();
-
-        state.review_prs.expanded_repos.clear();
-    }
-
-    pub fn toggle_expand(&self) {
+    pub fn jump_up(&self) {
         let mut state = self.state.write().unwrap();
         let prs_state = match state.active_panel {
             ActivePanel::PullRequestsToReview => &mut state.review_prs,
             ActivePanel::MyPullRequests => &mut state.assignee_prs,
         };
-        prs_state.toggle_expand();
+        prs_state.jump_up();
+
+        state.details.pr_details = prs_state.find_selected().cloned();
+    }
+
+    pub fn jump_down(&self) {
+        let mut state = self.state.write().unwrap();
+        let prs_state = match state.active_panel {
+            ActivePanel::PullRequestsToReview => &mut state.review_prs,
+            ActivePanel::MyPullRequests => &mut state.assignee_prs,
+        };
+        prs_state.jump_down();
+
+        state.details.pr_details = prs_state.find_selected().cloned();
     }
 
     pub fn next_tab(&self) {

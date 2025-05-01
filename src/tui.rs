@@ -74,10 +74,9 @@ impl App {
                     KeyCode::Char('k') | KeyCode::Up => self.pull_requests.scroll_up(),
                     KeyCode::Char('o') => self.pull_requests.open(),
                     KeyCode::Char('r') => self.pull_requests.review(),
-                    KeyCode::Char('z') => self.pull_requests.expand_all(),
-                    KeyCode::Char('c') => self.pull_requests.contract_all(),
                     KeyCode::Char('f') => self.pull_requests.refresh_pull_requests(),
-                    KeyCode::Enter => self.pull_requests.toggle_expand(),
+                    KeyCode::Char('d') => self.pull_requests.jump_down(),
+                    KeyCode::Char('u') => self.pull_requests.jump_up(),
                     KeyCode::Tab => self.pull_requests.next_tab(),
                     KeyCode::Char('?') => {
                         if !self.pull_requests.help_open() {
