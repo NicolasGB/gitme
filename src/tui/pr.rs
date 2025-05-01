@@ -274,10 +274,18 @@ impl PullRequestWidget {
 
     pub fn next_tab(&self) {
         let mut state = self.state.write().unwrap();
-        state.active_panel = match &state.active_panel {
-            ActivePanel::PullRequestsToReview => ActivePanel::MyPullRequests,
-            ActivePanel::MyPullRequests => ActivePanel::PullRequestsToReview,
+        let prs_state = match state.active_panel {
+            ActivePanel::PullRequestsToReview => {
+                state.active_panel = ActivePanel::MyPullRequests;
+                &mut state.assignee_prs
+            }
+            ActivePanel::MyPullRequests => {
+                state.active_panel = ActivePanel::PullRequestsToReview;
+                &mut state.review_prs
+            }
         };
+
+        state.details.pr_details = prs_state.find_selected().cloned();
     }
 
     pub fn open(&self) {
