@@ -43,9 +43,13 @@ impl App {
         let mut interval = tokio::time::interval(period);
         let mut events = EventStream::new();
 
+        let mut refresh_interval = tokio::time::interval(Duration::from_secs_f32(30_f32));
+
         while !self.should_quit {
             tokio::select! {
                 _ = interval.tick() => { terminal.draw(|frame| self.draw(frame))?; },
+                // Refresh pull requests on interval tick
+                _ = refresh_interval.tick() => { self.pull_requests.refresh_pull_requests() },
                 Some(Ok(event)) = events.next() => self.handle_event(&event).await,
             }
         }
@@ -72,6 +76,7 @@ impl App {
                     KeyCode::Char('r') => self.pull_requests.review(),
                     KeyCode::Char('z') => self.pull_requests.expand_all(),
                     KeyCode::Char('c') => self.pull_requests.contract_all(),
+                    KeyCode::Char('f') => self.pull_requests.refresh_pull_requests(),
                     KeyCode::Enter => self.pull_requests.toggle_expand(),
                     KeyCode::Tab => self.pull_requests.next_tab(),
                     KeyCode::Char('?') => {

@@ -44,7 +44,7 @@ struct PullRequestsDetailsState {
     pr_details: Option<PullRequest>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct PullRequest {
     id: String,
     title: String,
@@ -101,6 +101,7 @@ fn centered_rect(
 const KEYBINDINGS: &[(&str, &str)] = &[
     ("↑↓, j/k", "Scroll List"),
     ("TAB", "Switch Panel"),
+    ("f", "Refetch pulls"),
     ("Space", "Toggle Expand"), // Assuming space toggles expand based on pr_list_state
     ("z", "Expand All"),
     ("c", "Collapse All"),
@@ -110,22 +111,24 @@ const KEYBINDINGS: &[(&str, &str)] = &[
 ];
 
 impl PullRequestWidget {
-    pub(crate) fn new(config: Config) -> Self {
+    pub fn new(config: Config) -> Self {
         Self {
             config,
             state: Default::default(),
         }
     }
 
-    pub(crate) fn run(&self) {
-        self.config.repositories.iter().for_each(|r| {
-            let this = self.clone(); // clone the widget to pass to the background task
-            tokio::spawn(this.fetch_pulls(r.owner.clone(), r.name.clone()));
-        });
+    pub fn run(&self) {
+        self.refresh_pull_requests();
     }
 
-    async fn fetch_pulls(self, owner: String, repo: String) {
-        self.set_loading_state(LoadingState::Loading);
+    async fn fetch_pulls(
+        app_state: Arc<RwLock<AppState>>,
+        username: Option<String>,
+        owner: String,
+        repo: String,
+    ) {
+        Self::set_loading_state(&app_state, LoadingState::Loading);
 
         let pulls = octocrab::instance()
             .pulls(owner, repo)
@@ -136,13 +139,17 @@ impl PullRequestWidget {
             .await;
 
         match pulls {
-            Ok(page) => self.on_load(&page),
-            Err(err) => self.on_err(&err),
+            Ok(page) => Self::on_load(&app_state, &username, &page),
+            Err(err) => Self::on_err(&app_state, &err),
         }
     }
 
     // On a load of prs received, pushes them in their corresponding map entry in the prs state
-    fn on_load(&self, page: &Page<OctoPullRequest>) {
+    fn on_load(
+        app_state: &Arc<RwLock<AppState>>,
+        username: &Option<String>,
+        page: &Page<OctoPullRequest>,
+    ) {
         // List the pull requests filter them by the user that has to review them
         let prs_review: Vec<PullRequest> = page
             .items
@@ -150,7 +157,7 @@ impl PullRequestWidget {
             // Get only prs where my review was requested
             .filter(|pr| {
                 if let Some(reviewers) = &pr.requested_reviewers {
-                    if let Some(username) = &self.config.username {
+                    if let Some(username) = username {
                         return reviewers.iter().any(|e| e.login == *username);
                     }
                 }
@@ -164,7 +171,7 @@ impl PullRequestWidget {
             .iter()
             .filter(|pr| {
                 if let Some(assignees) = &pr.assignees {
-                    if let Some(username) = &self.config.username {
+                    if let Some(username) = username {
                         return assignees.iter().any(|e| e.login == *username);
                     }
                 }
@@ -173,17 +180,20 @@ impl PullRequestWidget {
             .map(Into::into)
             .collect();
 
-        let mut state = self.state.write().unwrap();
+        let mut state = app_state.write().unwrap();
         state.loading_state = LoadingState::Loaded;
 
         // Group the prs by repository to be able to better handle them later on in a tree view
         for pr in prs_review {
-            state
+            let repo = state
                 .review_prs
                 .grouped_prs
                 .entry(pr.repo.clone())
-                .or_default()
-                .push(pr);
+                .or_default();
+
+            if !repo.contains(&pr) {
+                repo.push(pr);
+            }
         }
 
         // If the map is not empty, and theres not a previously selected state
@@ -194,12 +204,15 @@ impl PullRequestWidget {
         }
 
         for pr in prs_assignee {
-            state
+            let repo = state
                 .assignee_prs
                 .grouped_prs
                 .entry(pr.repo.clone())
-                .or_default()
-                .push(pr);
+                .or_default();
+
+            if !repo.contains(&pr) {
+                repo.push(pr);
+            }
         }
 
         // If the map is not empty, and theres not a previously selected state
@@ -210,20 +223,23 @@ impl PullRequestWidget {
         }
     }
 
-    fn on_err(&self, err: &octocrab::Error) {
+    fn on_err(app_state: &Arc<RwLock<AppState>>, err: &octocrab::Error) {
         let error_message = match err {
             octocrab::Error::GitHub { source, .. } => source.message.clone(),
             // Fallback to display
             _ => format!("{}", err),
         };
 
-        self.set_loading_state(LoadingState::Error(error_message));
+        Self::set_loading_state(app_state, LoadingState::Error(error_message));
     }
 
-    fn set_loading_state(&self, state: LoadingState) {
-        self.state.write().unwrap().loading_state = state;
+    fn set_loading_state(app_state: &Arc<RwLock<AppState>>, state: LoadingState) {
+        app_state.write().unwrap().loading_state = state;
     }
+}
 
+// Eventful functions
+impl PullRequestWidget {
     pub fn scroll_down(&self) {
         let mut state = self.state.write().unwrap();
         let prs_state = match state.active_panel {
@@ -342,6 +358,17 @@ impl PullRequestWidget {
 
     pub fn help_open(&self) -> bool {
         self.state.read().unwrap().show_help
+    }
+
+    /// Calls the github api again and updates the prs
+    pub fn refresh_pull_requests(&self) {
+        self.config.repositories.iter().for_each(|r| {
+            let state = self.state.clone(); // clone the widget to pass to the background task
+            let username = self.config.username.clone();
+            let owner = r.owner.clone();
+            let repo = r.name.clone();
+            tokio::spawn(Self::fetch_pulls(state, username, owner, repo));
+        });
     }
 }
 
@@ -483,7 +510,7 @@ impl PullRequestWidget {
             ])
         });
 
-        let area = centered_rect(screen_area, 20, 15, 20, 10); // Use the full screen_area for centering
+        let area = centered_rect(screen_area, 20, 15, 20, 11); // Use the full screen_area for centering
         let popup_block = Block::default()
             .title(" Keybindings ")
             .title_bottom(" Esc to close ")
