@@ -63,32 +63,64 @@ impl App {
         let title = Line::from("GitMe PR").centered().bold();
         frame.render_widget(title, title_area);
         frame.render_widget(&self.pull_requests, body_area);
+        // Here we need to render the cursor in it's position when we are searching since the api
+        // is bind to the frame
+        if let Some(cursor_pos) = self.pull_requests.cursor_position() {
+            frame.set_cursor_position(cursor_pos);
+        }
     }
 
     async fn handle_event(&mut self, event: &Event) {
         if let Event::Key(key) = event {
             if key.kind == KeyEventKind::Press {
                 match key.code {
-                    KeyCode::Char('q') => self.should_quit = true,
-                    KeyCode::Char('j') | KeyCode::Down => self.pull_requests.scroll_down(),
-                    KeyCode::Char('k') | KeyCode::Up => self.pull_requests.scroll_up(),
-                    KeyCode::Char('o') => self.pull_requests.open(),
-                    KeyCode::Char('r') => self.pull_requests.review(),
-                    KeyCode::Char('f') => self.pull_requests.refresh_pull_requests(),
-                    KeyCode::Char('d') => self.pull_requests.jump_down(),
-                    KeyCode::Char('u') => self.pull_requests.jump_up(),
-                    KeyCode::Tab => self.pull_requests.next_tab(),
-                    KeyCode::Char('?') => {
-                        if !self.pull_requests.help_open() {
-                            self.pull_requests.toggle_help()
-                        }
-                    }
+                    // Handle Esc first to exit modes
                     KeyCode::Esc => {
                         if self.pull_requests.help_open() {
-                            self.pull_requests.toggle_help()
+                            self.pull_requests.toggle_help();
+                        } else if self.pull_requests.searching() {
+                            // Clear and toggle out the search
+                            self.pull_requests.clear_search();
+                            self.pull_requests.toggle_search();
                         }
                     }
-                    _ => {}
+                    KeyCode::Enter => {
+                        if self.pull_requests.searching() {
+                            self.pull_requests.toggle_search();
+                        }
+                    }
+                    // Handle search input if searching
+                    _ if self.pull_requests.searching() => {
+                        self.pull_requests.handle_search_input(event);
+                    }
+                    // Handle help toggle
+                    KeyCode::Char('?') => {
+                        if !self.pull_requests.help_open() {
+                            self.pull_requests.toggle_help();
+                        }
+                    }
+                    // Handle search toggle
+                    KeyCode::Char('/') => {
+                        if !self.pull_requests.searching() && !self.pull_requests.help_open() {
+                            self.pull_requests.toggle_search();
+                        }
+                    }
+                    // Handle other keys only if not searching or in help
+                    _ if !self.pull_requests.searching() && !self.pull_requests.help_open() => {
+                        match key.code {
+                            KeyCode::Char('q') => self.should_quit = true,
+                            KeyCode::Char('j') | KeyCode::Down => self.pull_requests.scroll_down(),
+                            KeyCode::Char('k') | KeyCode::Up => self.pull_requests.scroll_up(),
+                            KeyCode::Char('o') => self.pull_requests.open(),
+                            KeyCode::Char('r') => self.pull_requests.review(),
+                            KeyCode::Char('f') => self.pull_requests.refresh_pull_requests(),
+                            KeyCode::Char('d') => self.pull_requests.jump_down(),
+                            KeyCode::Char('u') => self.pull_requests.jump_up(),
+                            KeyCode::Tab => self.pull_requests.next_tab(),
+                            _ => {}
+                        }
+                    }
+                    _ => {} // Ignore other keys when help is open
                 }
             }
         }

@@ -5,6 +5,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use crossterm::event::Event;
 use octocrab::{
     Page,
     params::{Direction, State},
@@ -12,11 +13,12 @@ use octocrab::{
 use pr_list_state::PullRequestsListState;
 use ratatui::{
     buffer::Buffer,
-    layout::{Constraint, Flex, Layout, Rect},
+    layout::{Constraint, Flex, Layout, Position, Rect},
     style::{Color, Style, Stylize},
     text::Line,
     widgets::{Block, Cell, Paragraph, Row, Table, Widget, Wrap},
 };
+use tui_input::{Input, backend::crossterm::EventHandler};
 
 use crate::config::Config;
 
@@ -37,6 +39,10 @@ struct AppState {
 
     loading_state: LoadingState,
     show_help: bool,
+
+    searching: bool,
+    search: Input,
+    cursor_position: Option<Position>,
 }
 
 #[derive(Debug, Default)]
@@ -128,7 +134,7 @@ impl PullRequestWidget {
         owner: String,
         repo: String,
     ) {
-        Self::set_loading_state(&app_state, LoadingState::Loading);
+        Self::set_loading_state(Arc::clone(&app_state), LoadingState::Loading);
 
         let pulls = octocrab::instance()
             .pulls(owner, repo)
@@ -139,14 +145,14 @@ impl PullRequestWidget {
             .await;
 
         match pulls {
-            Ok(page) => Self::on_load(&app_state, &username, &page),
-            Err(err) => Self::on_err(&app_state, &err),
+            Ok(page) => Self::on_load(app_state, &username, &page),
+            Err(err) => Self::on_err(app_state, &err),
         }
     }
 
     // On a load of prs received, pushes them in their corresponding map entry in the prs state
     fn on_load(
-        app_state: &Arc<RwLock<AppState>>,
+        app_state: Arc<RwLock<AppState>>,
         username: &Option<String>,
         page: &Page<OctoPullRequest>,
     ) {
@@ -195,6 +201,8 @@ impl PullRequestWidget {
                 repo.push(pr);
             }
         }
+        // Update the view
+        state.review_prs.update_view();
 
         // If the map is not empty, and theres not a previously selected state
         if !state.review_prs.grouped_prs.is_empty()
@@ -215,6 +223,9 @@ impl PullRequestWidget {
             }
         }
 
+        // Update the view
+        state.assignee_prs.update_view();
+
         // If the map is not empty, and theres not a previously selected state
         if !state.assignee_prs.grouped_prs.is_empty()
             && state.assignee_prs.table_state.selected().is_none()
@@ -223,7 +234,7 @@ impl PullRequestWidget {
         }
     }
 
-    fn on_err(app_state: &Arc<RwLock<AppState>>, err: &octocrab::Error) {
+    fn on_err(app_state: Arc<RwLock<AppState>>, err: &octocrab::Error) {
         let error_message = match err {
             octocrab::Error::GitHub { source, .. } => source.message.clone(),
             // Fallback to display
@@ -233,8 +244,15 @@ impl PullRequestWidget {
         Self::set_loading_state(app_state, LoadingState::Error(error_message));
     }
 
-    fn set_loading_state(app_state: &Arc<RwLock<AppState>>, state: LoadingState) {
+    fn set_loading_state(app_state: Arc<RwLock<AppState>>, state: LoadingState) {
         app_state.write().unwrap().loading_state = state;
+    }
+
+    fn get_active_prs_state_mut(state: &mut AppState) -> &mut PullRequestsListState {
+        match state.active_panel {
+            ActivePanel::PullRequestsToReview => &mut state.review_prs,
+            ActivePanel::MyPullRequests => &mut state.assignee_prs,
+        }
     }
 }
 
@@ -242,10 +260,7 @@ impl PullRequestWidget {
 impl PullRequestWidget {
     pub fn scroll_down(&self) {
         let mut state = self.state.write().unwrap();
-        let prs_state = match state.active_panel {
-            ActivePanel::PullRequestsToReview => &mut state.review_prs,
-            ActivePanel::MyPullRequests => &mut state.assignee_prs,
-        };
+        let prs_state = Self::get_active_prs_state_mut(&mut state);
         prs_state.scroll_down();
 
         // If a pr is selected make it available in the details
@@ -254,10 +269,7 @@ impl PullRequestWidget {
 
     pub fn scroll_up(&self) {
         let mut state = self.state.write().unwrap();
-        let prs_state = match state.active_panel {
-            ActivePanel::PullRequestsToReview => &mut state.review_prs,
-            ActivePanel::MyPullRequests => &mut state.assignee_prs,
-        };
+        let prs_state = Self::get_active_prs_state_mut(&mut state);
         prs_state.scroll_up();
 
         state.details.pr_details = prs_state.find_selected().cloned();
@@ -265,10 +277,7 @@ impl PullRequestWidget {
 
     pub fn jump_up(&self) {
         let mut state = self.state.write().unwrap();
-        let prs_state = match state.active_panel {
-            ActivePanel::PullRequestsToReview => &mut state.review_prs,
-            ActivePanel::MyPullRequests => &mut state.assignee_prs,
-        };
+        let prs_state = Self::get_active_prs_state_mut(&mut state);
         prs_state.jump_up();
 
         state.details.pr_details = prs_state.find_selected().cloned();
@@ -276,10 +285,7 @@ impl PullRequestWidget {
 
     pub fn jump_down(&self) {
         let mut state = self.state.write().unwrap();
-        let prs_state = match state.active_panel {
-            ActivePanel::PullRequestsToReview => &mut state.review_prs,
-            ActivePanel::MyPullRequests => &mut state.assignee_prs,
-        };
+        let prs_state = Self::get_active_prs_state_mut(&mut state);
         prs_state.jump_down();
 
         state.details.pr_details = prs_state.find_selected().cloned();
@@ -357,6 +363,19 @@ impl PullRequestWidget {
         self.state.read().unwrap().show_help
     }
 
+    pub fn searching(&self) -> bool {
+        self.state.read().unwrap().searching
+    }
+
+    pub fn cursor_position(&self) -> Option<Position> {
+        self.state.read().unwrap().cursor_position
+    }
+
+    pub fn toggle_search(&self) {
+        let mut state = self.state.write().unwrap();
+        state.searching = !state.searching
+    }
+
     /// Calls the github api again and updates the prs
     pub fn refresh_pull_requests(&self) {
         self.config.repositories.iter().for_each(|r| {
@@ -366,6 +385,24 @@ impl PullRequestWidget {
             let repo = r.name.clone();
             tokio::spawn(Self::fetch_pulls(state, username, owner, repo));
         });
+    }
+
+    pub fn clear_search(&self) {
+        let mut state = self.state.write().unwrap();
+        state.search.reset();
+        state.review_prs.clear_filter_query();
+        state.assignee_prs.clear_filter_query();
+    }
+
+    pub fn handle_search_input(&self, event: &Event) {
+        let mut state = self.state.write().unwrap();
+        state.search.handle_event(event);
+
+        let value = state.search.value().to_string();
+
+        // We search in BOTH of the lists
+        state.review_prs.set_filter_query(Some(value.clone()));
+        state.assignee_prs.set_filter_query(Some(value));
     }
 }
 
@@ -379,7 +416,7 @@ impl Widget for &PullRequestWidget {
         let mut state = self.state.write().unwrap();
 
         // 3. Render Footer
-        self.render_footer(&state.loading_state, footer_area, buf);
+        self.render_footer(&mut state, footer_area, buf);
 
         // 4. Render Main Panels using state
         self.render_pr_list_panel(&mut state, prs_area, buf);
@@ -427,11 +464,15 @@ impl PullRequestWidget {
         };
         let title_line = Line::from(vec!["📋 ".into(), review_requested, " - ".into(), my_prs]);
 
-        let prs_block = Block::default()
+        let mut prs_block = Block::default()
             .title(title_line)
             .borders(ratatui::widgets::Borders::ALL)
-            .border_style(Style::default().fg(Color::Green))
             .border_type(ratatui::widgets::BorderType::Rounded);
+
+        // If we're not searching we are focused on the panel block
+        if !state.searching {
+            prs_block = prs_block.border_style(Style::default().fg(Color::Green));
+        }
 
         match state.active_panel {
             ActivePanel::PullRequestsToReview => {
@@ -477,26 +518,66 @@ impl PullRequestWidget {
         }
     }
 
-    fn render_footer(&self, loading_state: &LoadingState, area: Rect, buf: &mut Buffer) {
-        let loading_state = match loading_state {
-            LoadingState::Loading => String::from("Loading...").yellow(),
-            _ => String::from("").white(),
-        };
-        let bottom_box = Block::default()
-            .title("Help")
+    fn render_footer(&self, state: &mut AppState, area: Rect, buf: &mut Buffer) {
+        // Create the block with common styling first
+        let mut bottom_box = Block::default()
             .borders(ratatui::widgets::Borders::ALL)
             .border_type(ratatui::widgets::BorderType::Rounded);
 
-        let help_line = Line::styled(
-            format!(
-                "{loading_state} Scroll: ↑↓,j/k • Switch: TAB • Review: r • Keybindings: ? • Quit: q"
-            ),
-            Color::Green, // Consider theming
-        );
-
+        // Calculate inner area *before* setting title and potentially border style
         let bottom_inner = bottom_box.inner(area);
-        bottom_box.render(area, buf);
-        help_line.render(bottom_inner, buf);
+
+        // Determine title, content, and apply conditional styling
+        if state.searching || !state.search.value().is_empty() {
+            bottom_box = bottom_box
+                .title("Search")
+                .border_style(Style::default().fg(Color::Green)); // Green border when searching
+
+            // Render the block first to draw borders
+            bottom_box.render(area, buf);
+
+            // Calculate scroll for the search input
+            let width = bottom_inner.width.max(1) as usize; // Ensure width is at least 1
+            let scroll = state.search.visual_scroll(width);
+            let input_paragraph = Paragraph::new(state.search.value());
+
+            // Render the search text itself inside the inner area
+            input_paragraph.render(bottom_inner, buf);
+
+            // Calculate and store cursor position if searching is active
+            if state.searching {
+                let cursor_x_offset = (state.search.visual_cursor().max(scroll) - scroll) as u16;
+                // Store the calculated absolute position
+                state.cursor_position = Some(Position {
+                    x: bottom_inner.x + cursor_x_offset, // Absolute X position
+                    y: bottom_inner.y,                   // Absolute Y position
+                });
+            } else {
+                // Not actively searching, but might have text, don't show cursor
+                state.cursor_position = None;
+            }
+        } else {
+            // Not searching: Render help text
+            bottom_box = bottom_box.title("Help"); // Default title
+
+            // Render the block first
+            bottom_box.render(area, buf);
+
+            let loading_state = match state.loading_state {
+                LoadingState::Loading => "Loading... ".yellow(),
+                _ => "".into(),
+            };
+            let help_line = Line::from(vec![
+                loading_state,
+                "Scroll: ↑↓,j/k • Switch: TAB • Review: r • Keybindings: ? • Quit: q".green(),
+            ]);
+
+            // Render help text inside the inner area
+            help_line.render(bottom_inner, buf);
+
+            // No cursor when showing help
+            state.cursor_position = None;
+        }
     }
 
     fn render_help_popup(&self, screen_area: Rect, buf: &mut Buffer) {

@@ -116,11 +116,13 @@ This project is licensed under the MIT License - see the [LICENSE.md](LICENSE) f
 
 # TODO
 
-- [ ] Search in Prs
-- [ ] Manage config through CLI commands
-- [ ] Refetch periodically
-- [ ] Refetch on demand
+- [x] Search in Prs
+- [x] Refetch periodically
+- [x] Refetch on demand
+- [ ] Add better keybindings such as `(d/u)` for navigation through repositories
 - [ ] Open repositories and not just PRs
+- [ ] Manage config(s) through CLI commands
+- [ ] Build multi-user and multi-config as a first class citizen
 - [ ] Package and publish
 
 ## 🙏 Special Mentions

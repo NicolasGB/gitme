@@ -16,3 +16,4 @@ crossterm = { version = "0.28", features = ["event-stream"] }
 tokio-stream = "0.1"
 open = "5"
 tui-markdown = "0.3"
+tui-input = "0.12"

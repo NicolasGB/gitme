@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -9,15 +11,17 @@ use super::PullRequest;
 
 #[derive(Debug, Default)]
 pub struct PullRequestsListState {
-    pub grouped_prs: std::collections::BTreeMap<String, Vec<PullRequest>>,
+    pub grouped_prs: BTreeMap<String, Vec<PullRequest>>,
+    pub filtered_prs: BTreeMap<String, Vec<PullRequest>>,
     pub table_state: TableState,
+    filter_query: Option<String>,
 }
 
 impl PullRequestsListState {
     pub fn scroll_down(&mut self) {
         // Calculate total number of visible rows
         let total_rows = self
-            .grouped_prs
+            .filtered_prs
             .iter()
             .fold(0, |acc, (_repo, prs)| acc + 1 + prs.len());
         let current = self.table_state.selected().unwrap_or(0);
@@ -36,7 +40,7 @@ impl PullRequestsListState {
 
     pub fn jump_down(&mut self) {
         let total_rows = self
-            .grouped_prs
+            .filtered_prs
             .iter()
             .fold(0, |acc, (_repo, prs)| acc + 1 + prs.len());
         let current = self.table_state.selected().unwrap_or(0);
@@ -80,9 +84,45 @@ impl PullRequestsListState {
         None
     }
 
-    pub(crate) fn render_table(&mut self, block: Block, area: Rect, buf: &mut Buffer) {
+    pub fn set_filter_query(&mut self, query: Option<String>) {
+        self.filter_query = query;
+        self.update_view()
+    }
+
+    pub fn clear_filter_query(&mut self) {
+        self.filter_query = None;
+        self.update_view();
+    }
+
+    pub fn update_view(&mut self) {
+        let mut filtered_prs = BTreeMap::new();
+        // Check for an active filter and it's not ""
+        if let Some(query) = self.filter_query.as_ref().filter(|q| !q.is_empty()) {
+            for (repo, prs) in self.grouped_prs.iter() {
+                // If the query matches the repo name add all prs
+                if repo.to_lowercase().contains(&query.to_lowercase()) {
+                    filtered_prs.insert(repo.clone(), prs.clone());
+                } else {
+                    let matches: Vec<PullRequest> = prs
+                        .iter()
+                        .filter(|pr| pr.title.to_lowercase().contains(&query.to_lowercase()))
+                        .cloned()
+                        .collect();
+                    if !matches.is_empty() {
+                        filtered_prs.insert(repo.clone(), matches);
+                    }
+                }
+            }
+        } else {
+            filtered_prs = self.grouped_prs.clone();
+        }
+
+        self.filtered_prs = filtered_prs
+    }
+
+    pub fn render_table(&mut self, block: Block, area: Rect, buf: &mut Buffer) {
         let mut rows = Vec::new();
-        for (group, prs) in self.grouped_prs.iter() {
+        for (group, prs) in self.filtered_prs.iter() {
             rows.push(Row::new([format!("▼ {} ({})", group, prs.len())]));
             let prs_len = prs.len();
             prs.iter().enumerate().for_each(|(i, pr)| {
