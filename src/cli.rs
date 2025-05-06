@@ -22,7 +22,7 @@ impl GitMe {
     pub async fn run() -> Result<()> {
         let cli = Self::parse();
         // Get gitme config
-        let gitme_config = config::Config::new()?;
+        let mut gitme_config = config::Config::new()?;
 
         // Initialise octocrab
         let token = gitme_config.api_key.as_ref().cloned();
@@ -32,7 +32,10 @@ impl GitMe {
         octocrab::initialise(config);
 
         match cli.command {
-            Some(_) => todo!(),
+            Some(a) => match a {
+                Command::AddRepo => gitme_config.add_repository()?,
+                Command::DeleteRepo => gitme_config.remove_repository()?,
+            },
             None => tui::run(gitme_config).await?,
         };
 
