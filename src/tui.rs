@@ -1,7 +1,7 @@
 mod pr;
 
 use color_eyre::Result;
-use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind};
+use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind, KeyModifiers};
 use pr::PullRequestWidget;
 use ratatui::{
     DefaultTerminal, Frame,
@@ -114,8 +114,20 @@ impl App {
                             KeyCode::Char('o') => self.pull_requests.open(),
                             KeyCode::Char('r') => self.pull_requests.review(),
                             KeyCode::Char('f') => self.pull_requests.refresh_pull_requests(),
-                            KeyCode::Char('d') => self.pull_requests.jump_down(),
-                            KeyCode::Char('u') => self.pull_requests.jump_up(),
+                            KeyCode::Char('d') => {
+                                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                                    self.pull_requests.scroll_details_down();
+                                } else {
+                                    self.pull_requests.jump_down()
+                                }
+                            }
+                            KeyCode::Char('u') => {
+                                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                                    self.pull_requests.scroll_details_up();
+                                } else {
+                                    self.pull_requests.jump_up();
+                                }
+                            }
                             KeyCode::Tab => self.pull_requests.next_tab(),
                             _ => {}
                         }

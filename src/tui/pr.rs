@@ -48,6 +48,7 @@ struct AppState {
 #[derive(Debug, Default)]
 struct PullRequestsDetailsState {
     pr_details: Option<PullRequest>,
+    body_scroll: u16,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -122,8 +123,11 @@ const KEYBINDINGS: &[(&str, &str)] = &[
     ("Space", "Toggle Expand"), // Assuming space toggles expand based on pr_list_state
     ("r", "Review PR"),
     ("o", "Open in Browser"),
+    ("Ctrl+d/u", "Scroll Details"),
     ("q", "Quit"),
 ];
+
+const DETAILS_SCROLL_INCREMENT: u16 = 3;
 
 impl PullRequestWidget {
     pub fn new(config: Config) -> Self {
@@ -274,6 +278,7 @@ impl PullRequestWidget {
 
         // If a pr is selected make it available in the details
         state.details.pr_details = prs_state.find_selected().cloned();
+        state.details.body_scroll = 0;
     }
 
     pub fn scroll_up(&self) {
@@ -282,6 +287,7 @@ impl PullRequestWidget {
         prs_state.scroll_up();
 
         state.details.pr_details = prs_state.find_selected().cloned();
+        state.details.body_scroll = 0;
     }
 
     pub fn jump_up(&self) {
@@ -290,6 +296,7 @@ impl PullRequestWidget {
         prs_state.jump_up();
 
         state.details.pr_details = prs_state.find_selected().cloned();
+        state.details.body_scroll = 0;
     }
 
     pub fn jump_down(&self) {
@@ -298,6 +305,27 @@ impl PullRequestWidget {
         prs_state.jump_down();
 
         state.details.pr_details = prs_state.find_selected().cloned();
+        state.details.body_scroll = 0;
+    }
+
+    pub fn scroll_details_down(&self) {
+        let mut state = self.state.write().unwrap();
+        if state.details.pr_details.is_some() {
+            state.details.body_scroll = state
+                .details
+                .body_scroll
+                .saturating_add(DETAILS_SCROLL_INCREMENT);
+        }
+    }
+
+    pub fn scroll_details_up(&self) {
+        let mut state = self.state.write().unwrap();
+        if state.details.pr_details.is_some() {
+            state.details.body_scroll = state
+                .details
+                .body_scroll
+                .saturating_sub(DETAILS_SCROLL_INCREMENT);
+        }
     }
 
     pub fn next_tab(&self) {
@@ -538,6 +566,7 @@ impl PullRequestWidget {
             Paragraph::new(&*pr_details.body)
                 .block(details_block)
                 .wrap(Wrap { trim: true })
+                .scroll((details_state.body_scroll, 0))
                 .render(body_area, buf);
 
             Paragraph::new(&*pr_details.author)
