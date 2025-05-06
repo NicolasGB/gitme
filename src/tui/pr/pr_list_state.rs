@@ -4,6 +4,7 @@ use ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::{Color, Style},
+    text::Span,
     widgets::{Block, Row, StatefulWidget, Table, TableState},
 };
 
@@ -50,6 +51,46 @@ impl PullRequestsListState {
         } else {
             self.table_state.scroll_down_by(5);
         }
+    }
+
+    /// Sets the table state to the next available repository
+    pub fn next_repository(&mut self) {
+        if let Some(current_selected_index) = self.table_state.selected() {
+            let repo_indexes = self.repository_indexes();
+
+            if let Some(next_repo) = repo_indexes.iter().find(|i| **i > current_selected_index) {
+                self.table_state.select(Some(*next_repo));
+            }
+        }
+    }
+
+    /// Sets the table state to the previous available repository
+    pub fn previous_repository(&mut self) {
+        if let Some(current_selected_index) = self.table_state.selected() {
+            let repo_indexes = self.repository_indexes();
+
+            let previous_repo = repo_indexes
+                .iter()
+                .take_while(|index| **index < current_selected_index)
+                .copied()
+                .last()
+                .unwrap_or(0);
+
+            self.table_state.select(Some(previous_repo));
+        }
+    }
+
+    /// Returns all the indexes from the visible repositories
+    fn repository_indexes(&self) -> Vec<usize> {
+        let mut indexes = vec![];
+        let mut counter = 0;
+        self.filtered_prs.iter().for_each(|(_, prs)| {
+            indexes.push(counter);
+            // Increment the index counter (1 is the row header that is virtual)
+            counter += 1 + prs.len()
+        });
+
+        indexes
     }
 
     pub fn find_selected(&self) -> Option<&PullRequest> {
@@ -105,7 +146,12 @@ impl PullRequestsListState {
                 } else {
                     let matches: Vec<PullRequest> = prs
                         .iter()
-                        .filter(|pr| pr.title.to_lowercase().contains(&query.to_lowercase()))
+                        .filter(|pr| {
+                            // Search in the line with the same format of the display
+                            let line_text =
+                                format!("#{} - {}", pr.id.to_lowercase(), pr.title.to_lowercase());
+                            line_text.contains(&query.to_lowercase())
+                        })
                         .cloned()
                         .collect();
                     if !matches.is_empty() {
@@ -117,13 +163,37 @@ impl PullRequestsListState {
             filtered_prs = self.grouped_prs.clone();
         }
 
-        self.filtered_prs = filtered_prs
+        // Assign the filtered prs
+        self.filtered_prs = filtered_prs;
+
+        // Handle selected state
+        let total_prs = self
+            .filtered_prs
+            .values()
+            // +1 indicates the title that is virtual
+            .map(|prs| prs.len() + 1)
+            .sum::<usize>();
+        if let Some(selected) = self.table_state.selected() {
+            if selected >= total_prs {
+                self.table_state.select(Some(0));
+            }
+        } else if total_prs != 0 {
+            // If nothing is selected it means at some point there was no rows displayed
+            // To avoid issues since now we know there is something displayed, we put it
+            // in the first index
+            self.table_state.select(Some(0));
+        }
     }
 
     pub fn render_table(&mut self, block: Block, area: Rect, buf: &mut Buffer) {
         let mut rows = Vec::new();
         for (group, prs) in self.filtered_prs.iter() {
-            rows.push(Row::new([format!("▼ {} ({})", group, prs.len())]));
+            // Set repo title with a color
+            let repo = Span::styled(
+                format!("▼ {} ({})", group, prs.len()),
+                Style::default().fg(Color::Yellow),
+            );
+            rows.push(Row::new([repo]));
             let prs_len = prs.len();
             prs.iter().enumerate().for_each(|(i, pr)| {
                 let mut prefix = "├─";

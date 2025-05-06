@@ -16,7 +16,10 @@ use ratatui::{
     layout::{Constraint, Flex, Layout, Position, Rect},
     style::{Color, Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, Cell, Paragraph, Row, Table, Widget, Wrap, block::Title},
+    widgets::{
+        Block, Cell, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState,
+        StatefulWidget, Table, Widget, Wrap, block::Title,
+    },
 };
 use tui_input::{Input, backend::crossterm::EventHandler};
 
@@ -49,6 +52,7 @@ struct AppState {
 struct PullRequestsDetailsState {
     pr_details: Option<PullRequest>,
     body_scroll: u16,
+    scrollbar_state: ScrollbarState,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -118,12 +122,13 @@ fn block_with_title<'a>(title: impl Into<Title<'a>>) -> Block<'a> {
 
 const KEYBINDINGS: &[(&str, &str)] = &[
     ("↑↓, j/k", "Scroll List"),
+    ("n", "Next repository"),
+    ("p", "Previous repository"),
+    ("Ctrl+d/u", "Scroll Details"),
     ("TAB", "Switch Panel"),
     ("f", "Refetch pulls"),
-    ("Space", "Toggle Expand"), // Assuming space toggles expand based on pr_list_state
     ("r", "Review PR"),
     ("o", "Open in Browser"),
-    ("Ctrl+d/u", "Scroll Details"),
     ("q", "Quit"),
 ];
 
@@ -150,7 +155,7 @@ impl PullRequestWidget {
         Self::set_loading_state(Arc::clone(&app_state), LoadingState::Loading);
 
         let pulls = octocrab::instance()
-            .pulls(owner, repo)
+            .pulls(owner, &repo)
             .list()
             .state(State::Open)
             .direction(Direction::Descending)
@@ -158,7 +163,7 @@ impl PullRequestWidget {
             .await;
 
         match pulls {
-            Ok(page) => Self::on_load(app_state, username.as_ref(), &page),
+            Ok(page) => Self::on_load(app_state, username.as_ref(), &page, repo),
             Err(err) => Self::on_err(app_state, &err),
         }
     }
@@ -168,6 +173,7 @@ impl PullRequestWidget {
         app_state: Arc<RwLock<AppState>>,
         username: Option<&String>,
         page: &Page<OctoPullRequest>,
+        repo: String,
     ) {
         // List the pull requests filter them by the user that has to review them
         let prs_review: Vec<PullRequest> = page
@@ -202,17 +208,19 @@ impl PullRequestWidget {
         let mut state = app_state.write().unwrap();
         state.loading_state = LoadingState::Loaded;
 
-        // Group the prs by repository to be able to better handle them later on in a tree view
-        for pr in prs_review {
-            let repo = state
+        // handle review prs
+        if !prs_review.is_empty() {
+            // Get  the review repo and clear previous entries
+            let review_repo = state
                 .review_prs
                 .grouped_prs
-                .entry(pr.repo.clone())
+                .entry(repo.clone())
                 .or_default();
 
-            if !repo.contains(&pr) {
-                repo.push(pr);
-            }
+            review_repo.clear();
+            review_repo.extend(prs_review);
+        } else {
+            let _ = state.review_prs.grouped_prs.remove(&repo);
         }
         // Update the view
         state.review_prs.update_view();
@@ -224,18 +232,14 @@ impl PullRequestWidget {
             state.review_prs.table_state.select(Some(0));
         }
 
-        for pr in prs_assignee {
-            let repo = state
-                .assignee_prs
-                .grouped_prs
-                .entry(pr.repo.clone())
-                .or_default();
-
-            if !repo.contains(&pr) {
-                repo.push(pr);
-            }
+        if !prs_assignee.is_empty() {
+            // Now do the same for assigned
+            let assignee_repo = state.assignee_prs.grouped_prs.entry(repo).or_default();
+            assignee_repo.clear();
+            assignee_repo.extend(prs_assignee);
+        } else {
+            let _ = state.assignee_prs.grouped_prs.remove(&repo);
         }
-
         // Update the view
         state.assignee_prs.update_view();
 
@@ -279,6 +283,7 @@ impl PullRequestWidget {
         // If a pr is selected make it available in the details
         state.details.pr_details = prs_state.find_selected().cloned();
         state.details.body_scroll = 0;
+        state.details.scrollbar_state = ScrollbarState::default();
     }
 
     pub fn scroll_up(&self) {
@@ -288,6 +293,7 @@ impl PullRequestWidget {
 
         state.details.pr_details = prs_state.find_selected().cloned();
         state.details.body_scroll = 0;
+        state.details.scrollbar_state = ScrollbarState::default();
     }
 
     pub fn jump_up(&self) {
@@ -297,6 +303,7 @@ impl PullRequestWidget {
 
         state.details.pr_details = prs_state.find_selected().cloned();
         state.details.body_scroll = 0;
+        state.details.scrollbar_state = ScrollbarState::default();
     }
 
     pub fn jump_down(&self) {
@@ -306,25 +313,54 @@ impl PullRequestWidget {
 
         state.details.pr_details = prs_state.find_selected().cloned();
         state.details.body_scroll = 0;
+        state.details.scrollbar_state = ScrollbarState::default();
+    }
+
+    pub fn next_repository(&self) {
+        let mut state = self.state.write().unwrap();
+        let prs_state = Self::get_active_prs_state_mut(&mut state);
+
+        prs_state.next_repository();
+
+        state.details.pr_details = prs_state.find_selected().cloned();
+        state.details.body_scroll = 0;
+        state.details.scrollbar_state = ScrollbarState::default();
+    }
+
+    pub fn previous_repository(&self) {
+        let mut state = self.state.write().unwrap();
+        let prs_state = Self::get_active_prs_state_mut(&mut state);
+
+        prs_state.previous_repository();
+
+        state.details.pr_details = prs_state.find_selected().cloned();
+        state.details.body_scroll = 0;
+        state.details.scrollbar_state = ScrollbarState::default();
     }
 
     pub fn scroll_details_down(&self) {
         let mut state = self.state.write().unwrap();
         if state.details.pr_details.is_some() {
-            state.details.body_scroll = state
+            let scroll = state
                 .details
                 .body_scroll
                 .saturating_add(DETAILS_SCROLL_INCREMENT);
+
+            state.details.body_scroll = scroll;
+            state.details.scrollbar_state = state.details.scrollbar_state.position(scroll as usize);
         }
     }
 
     pub fn scroll_details_up(&self) {
         let mut state = self.state.write().unwrap();
         if state.details.pr_details.is_some() {
-            state.details.body_scroll = state
+            let scroll = state
                 .details
                 .body_scroll
                 .saturating_sub(DETAILS_SCROLL_INCREMENT);
+
+            state.details.body_scroll = scroll;
+            state.details.scrollbar_state = state.details.scrollbar_state.position(scroll as usize);
         }
     }
 
@@ -459,7 +495,7 @@ impl Widget for &PullRequestWidget {
         // 4. Render Main Panels using state
         self.render_pr_list_panel(&mut state, prs_area, buf);
         self.render_details_panel(
-            &state.details,
+            &mut state.details,
             details_title_area,
             details_body_area,
             author_area,
@@ -528,7 +564,7 @@ impl PullRequestWidget {
 
     fn render_details_panel(
         &self,
-        details_state: &PullRequestsDetailsState,
+        details_state: &mut PullRequestsDetailsState,
         title_area: Rect,
         body_area: Rect,
         footer_area: Rect,
@@ -563,11 +599,32 @@ impl PullRequestWidget {
                 .render(title_area, buf);
 
             // let body_content = tui_markdown::from_str(&pr_details.body);
-            Paragraph::new(&*pr_details.body)
+            let body_inner = details_block.inner(body_area);
+            let body_paragraph = Paragraph::new(&*pr_details.body)
                 .block(details_block)
                 .wrap(Wrap { trim: true })
-                .scroll((details_state.body_scroll, 0))
-                .render(body_area, buf);
+                .scroll((details_state.body_scroll, 0));
+
+            body_paragraph.render(body_area, buf);
+
+            // Check if there needs to be a scrollbar displayed meaning that the total lines
+            // wrapped  are greater than the inner body viewport
+            let wrapped_lines = textwrap::wrap(&pr_details.body, body_inner.width as usize);
+            let total_lines_after_wrapping = wrapped_lines.len();
+            let viewport_height = body_inner.height as usize;
+
+            if total_lines_after_wrapping > viewport_height {
+                details_state.scrollbar_state = details_state
+                    .scrollbar_state
+                    .content_length(total_lines_after_wrapping)
+                    .viewport_content_length(viewport_height);
+
+                Scrollbar::new(ScrollbarOrientation::VerticalRight).render(
+                    body_area,
+                    buf,
+                    &mut details_state.scrollbar_state,
+                );
+            }
 
             Paragraph::new(&*pr_details.author)
                 .block(author_block)
@@ -665,7 +722,7 @@ impl PullRequestWidget {
             ])
         });
 
-        let area = centered_rect(screen_area, 20, 15, 20, 11); // Use the full screen_area for centering
+        let area = centered_rect(screen_area, 20, 15, 35, 11); // Use the full screen_area for centering
         let popup_block = block_with_title(" Keybindings ")
             .title_bottom(" Esc to close ")
             .borders(ratatui::widgets::Borders::ALL)
