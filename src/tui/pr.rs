@@ -15,8 +15,8 @@ use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Flex, Layout, Position, Rect},
     style::{Color, Style, Stylize},
-    text::Line,
-    widgets::{Block, Cell, Paragraph, Row, Table, Widget, Wrap},
+    text::{Line, Span},
+    widgets::{Block, Cell, Paragraph, Row, Table, Widget, Wrap, block::Title},
 };
 use tui_input::{Input, backend::crossterm::EventHandler};
 
@@ -57,7 +57,10 @@ struct PullRequest {
     url: String,
     repo: String,
     body: String,
+    author: String,
     is_draft: bool,
+    mergeable: bool,
+    rebaseable: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd)]
@@ -104,13 +107,19 @@ fn centered_rect(
     final_area
 }
 
+/// Helper function that returns a default block with borders with a given title
+fn block_with_title<'a>(title: impl Into<Title<'a>>) -> Block<'a> {
+    Block::default()
+        .title(title)
+        .borders(ratatui::widgets::Borders::ALL)
+        .border_type(ratatui::widgets::BorderType::Rounded)
+}
+
 const KEYBINDINGS: &[(&str, &str)] = &[
     ("↑↓, j/k", "Scroll List"),
     ("TAB", "Switch Panel"),
     ("f", "Refetch pulls"),
     ("Space", "Toggle Expand"), // Assuming space toggles expand based on pr_list_state
-    ("z", "Expand All"),
-    ("c", "Collapse All"),
     ("r", "Review PR"),
     ("o", "Open in Browser"),
     ("q", "Quit"),
@@ -145,7 +154,7 @@ impl PullRequestWidget {
             .await;
 
         match pulls {
-            Ok(page) => Self::on_load(app_state, &username, &page),
+            Ok(page) => Self::on_load(app_state, username.as_ref(), &page),
             Err(err) => Self::on_err(app_state, &err),
         }
     }
@@ -153,7 +162,7 @@ impl PullRequestWidget {
     // On a load of prs received, pushes them in their corresponding map entry in the prs state
     fn on_load(
         app_state: Arc<RwLock<AppState>>,
-        username: &Option<String>,
+        username: Option<&String>,
         page: &Page<OctoPullRequest>,
     ) {
         // List the pull requests filter them by the user that has to review them
@@ -410,7 +419,8 @@ impl Widget for &PullRequestWidget {
     fn render(self, area: Rect, buf: &mut Buffer) {
         // 1. Calculate Layout (could be a helper function)
         let (prs_area, details_area, footer_area) = self.calculate_main_layout(area);
-        let (details_title_area, details_body_area) = self.calculate_details_layout(details_area);
+        let (details_title_area, details_body_area, author_area) =
+            self.calculate_details_layout(details_area);
 
         // 2. Acquire Lock
         let mut state = self.state.write().unwrap();
@@ -420,7 +430,13 @@ impl Widget for &PullRequestWidget {
 
         // 4. Render Main Panels using state
         self.render_pr_list_panel(&mut state, prs_area, buf);
-        self.render_details_panel(&state.details, details_title_area, details_body_area, buf);
+        self.render_details_panel(
+            &state.details,
+            details_title_area,
+            details_body_area,
+            author_area,
+            buf,
+        );
 
         // 5. Render Popups if needed
         if state.show_help {
@@ -444,10 +460,11 @@ impl PullRequestWidget {
         (prs_layout[0], prs_layout[1], base_layout[1])
     }
 
-    fn calculate_details_layout(&self, details_area: Rect) -> (Rect, Rect) {
+    fn calculate_details_layout(&self, details_area: Rect) -> (Rect, Rect, Rect) {
         let details_layout =
-            Layout::vertical([Constraint::Max(3), Constraint::Min(10)]).split(details_area);
-        (details_layout[0], details_layout[1])
+            Layout::vertical([Constraint::Max(3), Constraint::Min(10), Constraint::Max(3)])
+                .split(details_area);
+        (details_layout[0], details_layout[1], details_layout[2])
     }
 
     fn render_pr_list_panel(&self, state: &mut AppState, area: Rect, buf: &mut Buffer) {
@@ -464,10 +481,7 @@ impl PullRequestWidget {
         };
         let title_line = Line::from(vec!["📋 ".into(), review_requested, " - ".into(), my_prs]);
 
-        let mut prs_block = Block::default()
-            .title(title_line)
-            .borders(ratatui::widgets::Borders::ALL)
-            .border_type(ratatui::widgets::BorderType::Rounded);
+        let mut prs_block = block_with_title(title_line);
 
         // If we're not searching we are focused on the panel block
         if !state.searching {
@@ -489,17 +503,30 @@ impl PullRequestWidget {
         details_state: &PullRequestsDetailsState,
         title_area: Rect,
         body_area: Rect,
+        footer_area: Rect,
         buf: &mut Buffer,
     ) {
-        let title_block = Block::default()
-            .title("Title")
-            .borders(ratatui::widgets::Borders::ALL)
-            .border_type(ratatui::widgets::BorderType::Rounded);
+        let title_block = block_with_title("Title");
+        let details_block = block_with_title("Details");
+        // Split the footer into different blocks
+        let footer_layout = Layout::horizontal([
+            Constraint::Min(30),
+            Constraint::Max(13),
+            Constraint::Max(13),
+        ])
+        .split(footer_area);
 
-        let details_block = Block::default()
-            .title("Details")
-            .borders(ratatui::widgets::Borders::ALL)
-            .border_type(ratatui::widgets::BorderType::Rounded);
+        let author_block = block_with_title("Author");
+        let mergeable_block = block_with_title("Mergeable");
+        let rebaseable_block = block_with_title("Rebaseable");
+
+        let get_status_span = |value: bool| {
+            if value {
+                Span::styled("Yes", Style::default().fg(Color::Green))
+            } else {
+                Span::styled("No", Style::default().fg(Color::Red))
+            }
+        };
 
         if let Some(pr_details) = &details_state.pr_details {
             Paragraph::new(&*pr_details.title)
@@ -507,14 +534,35 @@ impl PullRequestWidget {
                 .wrap(Wrap { trim: true })
                 .render(title_area, buf);
 
-            let body_content = tui_markdown::from_str(&pr_details.body);
-            Paragraph::new(body_content)
+            // let body_content = tui_markdown::from_str(&pr_details.body);
+            Paragraph::new(&*pr_details.body)
                 .block(details_block)
                 .wrap(Wrap { trim: true })
                 .render(body_area, buf);
+
+            Paragraph::new(&*pr_details.author)
+                .block(author_block)
+                .wrap(Wrap { trim: true })
+                .render(footer_layout[0], buf);
+
+            let mergeable_span = get_status_span(pr_details.mergeable);
+            Paragraph::new(mergeable_span)
+                .block(mergeable_block)
+                .wrap(Wrap { trim: true })
+                .render(footer_layout[1], buf);
+
+            let rebaseable_span = get_status_span(pr_details.rebaseable);
+            Paragraph::new(rebaseable_span)
+                .block(rebaseable_block)
+                .wrap(Wrap { trim: true })
+                .render(footer_layout[2], buf);
         } else {
+            // Render the empty blocks
             title_block.render(title_area, buf);
             details_block.render(body_area, buf);
+            author_block.render(footer_layout[0], buf);
+            mergeable_block.render(footer_layout[1], buf);
+            rebaseable_block.render(footer_layout[2], buf);
         }
     }
 
@@ -589,8 +637,7 @@ impl PullRequestWidget {
         });
 
         let area = centered_rect(screen_area, 20, 15, 20, 11); // Use the full screen_area for centering
-        let popup_block = Block::default()
-            .title(" Keybindings ")
+        let popup_block = block_with_title(" Keybindings ")
             .title_bottom(" Esc to close ")
             .borders(ratatui::widgets::Borders::ALL)
             .border_style(Style::default().fg(Color::LightCyan)); // Theming
@@ -604,8 +651,7 @@ impl PullRequestWidget {
     }
 
     fn render_error_popup(&self, err_msg: &str, screen_area: Rect, buf: &mut Buffer) {
-        let popup_block = Block::default()
-            .title(" Error ")
+        let popup_block = block_with_title(" Errors ")
             .title_bottom(" q to quit ")
             .borders(ratatui::widgets::Borders::ALL)
             .border_style(Style::default().fg(Color::Red)); // Theming
@@ -636,6 +682,19 @@ impl From<&OctoPullRequest> for PullRequest {
             repo: pr.base.repo.as_ref().unwrap().name.clone(),
             body: pr.body.as_ref().cloned().unwrap_or_default(),
             is_draft: pr.draft.unwrap_or_default(),
+            author: pr
+                .user
+                .as_ref()
+                .map(|a| {
+                    if let Some(email) = &a.email {
+                        format!("{} - {}", a.login, email)
+                    } else {
+                        a.login.clone()
+                    }
+                })
+                .unwrap_or_default(),
+            mergeable: pr.mergeable.unwrap_or_default(),
+            rebaseable: pr.rebaseable.unwrap_or_default(),
         }
     }
 }

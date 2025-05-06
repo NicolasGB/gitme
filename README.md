@@ -86,8 +86,6 @@ gitme
 - **`↓` / `j`**: Scroll Down
 - **`Tab`**: Switch between "Review Requested" and "My Pull Requests" panels.
 - **`Enter`**: Toggle expand/collapse for the selected repository group.
-- **`z`**: Expand all repository groups in the current panel.
-- **`c`**: Collapse all repository groups in the current panel.
 - **`o`**: Open the selected Pull Request in your default web browser.
 - **`r`**: Trigger the "Review" action (runs the configured `command` in the `system_path` if set).
 - **`?`**: Show/Hide the keybindings help popup.
