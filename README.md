@@ -4,14 +4,13 @@
 
 ## ✨ Features
 
-- **Dual PR Views:** Easily switch between viewing Pull Requests requesting your review and Pull Requests assigned to you.
-- **Repository Grouping:** PRs are grouped by repository for better organization.
-- **Expand/Collapse:** Expand or collapse repository groups to focus on what matters.
-- **GitHub Integration:** Fetches real-time PR data using the GitHub API.
-- **Quick Actions:**
-  - Open PRs directly in your web browser.
-  - Trigger a custom "review" command (e.g., open your terminal/editor in the project's local directory).
-- **Configurable:** Define which repositories to watch and customize behavior via a simple TOML configuration file.
+- **Review Requested:** See all pull requests where your review is requested.
+- **My Pull Requests:** List all pull requests you have opened.
+- **Search:** Filter both "Review Requested" and "My Pull Requests" lists by repository name, PR ID, or PR title.
+- **PR Details:** View pull request details, including description, status, reviewers, and labels.
+- **Actions:** Quickly open PRs in the browser or copy their URLs.
+- **Live Updates:** Automatically refreshes PR lists to show the latest changes.
+- **Keyboard Shortcuts:** Navigate and manage PRs efficiently with customizable keyboard shortcuts.
 
 ## 📦 Installation
 
@@ -114,12 +113,14 @@ This project is licensed under the MIT License - see the [LICENSE.md](LICENSE) f
 
 # TODO
 
-- [x] Search in Prs
+- [x] Search in Pr (Partially done, missing other fields of search)
 - [x] Refetch periodically
 - [x] Refetch on demand
 - [x] Add better keybindings such as `(n/p)` for navigation through repositories
+- [x] Manage config(s) through CLI commands (Partially done)
+- [ ] Copy pr links directly with `y` binding
+- [ ] Add review history in details view
 - [ ] Open repositories and not just PRs
-- [ ] Manage config(s) through CLI commands
 - [ ] Build multi-user and multi-config as a first class citizen
 - [ ] Package and publish
 

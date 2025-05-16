@@ -1,6 +1,7 @@
 mod pr_list_state;
 
 use std::{
+    collections::HashMap,
     process::Command,
     sync::{Arc, RwLock},
 };
@@ -8,6 +9,7 @@ use std::{
 use crossterm::event::Event;
 use octocrab::{
     Page,
+    models::UserProfile,
     params::{Direction, State},
 };
 use pr_list_state::PullRequestsListState;
@@ -21,6 +23,7 @@ use ratatui::{
         StatefulWidget, Table, Widget, Wrap, block::Title,
     },
 };
+use tokio::task::JoinSet;
 use tui_input::{Input, backend::crossterm::EventHandler};
 
 use crate::config::Config;
@@ -39,6 +42,7 @@ struct AppState {
     assignee_prs: PullRequestsListState,
 
     details: PullRequestsDetailsState,
+    cached_authors: HashMap<String, Profile>,
 
     loading_state: LoadingState,
     show_help: bool,
@@ -66,6 +70,13 @@ struct PullRequest {
     is_draft: bool,
     mergeable: bool,
     rebaseable: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct Profile {
+    id: String,
+    login: String,
+    name: String,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd)]
@@ -126,6 +137,7 @@ const KEYBINDINGS: &[(&str, &str)] = &[
     ("p", "Previous repository"),
     ("Ctrl+d/u", "Scroll Details"),
     ("TAB", "Switch Panel"),
+    ("/", "Search"),
     ("f", "Refetch pulls"),
     ("r", "Review PR"),
     ("o", "Open in Browser"),
@@ -155,7 +167,7 @@ impl PullRequestWidget {
         Self::set_loading_state(Arc::clone(&app_state), LoadingState::Loading);
 
         let pulls = octocrab::instance()
-            .pulls(owner, &repo)
+            .pulls(&owner, &repo)
             .list()
             .state(State::Open)
             .direction(Direction::Descending)
@@ -163,50 +175,126 @@ impl PullRequestWidget {
             .await;
 
         match pulls {
-            Ok(page) => Self::on_load(app_state, username.as_ref(), &page, repo),
+            Ok(page) => Self::on_load(app_state, username.as_ref(), &page, owner, repo).await,
             Err(err) => Self::on_err(app_state, &err),
         }
     }
 
     // On a load of prs received, pushes them in their corresponding map entry in the prs state
-    fn on_load(
+    async fn on_load(
         app_state: Arc<RwLock<AppState>>,
         username: Option<&String>,
         page: &Page<OctoPullRequest>,
+        owner: String,
         repo: String,
     ) {
-        // List the pull requests filter them by the user that has to review them
-        let prs_review: Vec<PullRequest> = page
-            .items
-            .iter()
-            // Get only prs where my review was requested
-            .filter(|pr| {
-                if let Some(reviewers) = &pr.requested_reviewers {
-                    if let Some(username) = username {
-                        return reviewers.iter().any(|e| e.login == *username);
-                    }
-                }
-                false
-            })
-            .map(Into::into)
-            .collect();
+        let mut prs_review = vec![];
+        let mut prs_assignee = vec![];
+        let mut reviews_set = JoinSet::new();
+        let mut author_set = JoinSet::new();
 
-        let prs_assignee: Vec<PullRequest> = page
-            .items
-            .iter()
-            .filter(|pr| {
-                if let Some(assignees) = &pr.assignees {
-                    if let Some(username) = username {
-                        return assignees.iter().any(|e| e.login == *username);
+        for pr in page.items.iter() {
+            // Transform the pr to our domain
+            let pr_to_push: PullRequest = pr.into();
+
+            // Check if the author of this pr is already in cache or we need to fetch it
+            {
+                let state = app_state.read().unwrap();
+                //Add the author from the cached authors
+                if let Some(user) = &pr.user {
+                    // If the user is not in the cache request it's profile
+                    if !state.cached_authors.contains_key(&user.login) {
+                        let id = user.id;
+                        author_set.spawn(async move {
+                            let prof: Profile = octocrab::instance()
+                                .users_by_id(id)
+                                .profile()
+                                .await
+                                .unwrap()
+                                .into();
+                            prof
+                        });
                     }
                 }
-                false
-            })
-            .map(Into::into)
-            .collect();
+            }
+
+            // If an username is set in the config, try and fetch reviews/assignees
+            if let Some(username) = username {
+                // Check if we are assignee
+                if let Some(assignees) = &pr.assignees {
+                    if assignees.iter().any(|e| e.login == *username) {
+                        prs_assignee.push(pr_to_push);
+                        // Would be very weird to be assignee and reviewer
+                        // as of now we're gonna skip if we are assignee maybe i'll come back to
+                        // this decision at some poit
+                        continue;
+                    }
+                }
+
+                // Check if we are reviewers
+                if let Some(reviewers) = &pr.requested_reviewers {
+                    // If the reviewer is requested and has not yet been reviewed push the pr
+                    if reviewers.iter().any(|e| e.login == *username) {
+                        prs_review.push(pr_to_push);
+                        // Go to next iteration
+                        continue;
+                    }
+                }
+
+                // Otherwise we might have reviewed already but the pr is still open
+                // For reference of the doc:
+                // Gets the users or teams whose review is requested for a pull request.
+                // Once a requested reviewer submits a review, they are no longer considered a requested reviewer.
+
+                // Therefore we are going to request another endpoint to make sure we are not
+                // reviewers of the pr (assuming if we have submited a review we are a reviewer)
+                let owner = owner.clone();
+                let repo = repo.clone();
+                let number = pr.number;
+                reviews_set.spawn(async move {
+                    (
+                        octocrab::instance()
+                            .pulls(owner, repo)
+                            .list_reviews(number)
+                            .send()
+                            .await,
+                        pr_to_push,
+                    )
+                });
+            }
+        }
+
+        for (reviews, pr) in reviews_set.join_all().await {
+            match reviews {
+                Ok(page) => {
+                    if page.items.iter().any(|r| {
+                        if let Some(u) = &r.user {
+                            if let Some(username) = username {
+                                return u.login == *username;
+                            }
+                        }
+                        false
+                    }) {
+                        // If found append the pr to the reviewwers
+                        prs_review.push(pr);
+                    }
+                }
+                // If error set it and return
+                Err(err) => return Self::on_err(app_state, &err),
+            }
+        }
+
+        let mut authors_to_add = vec![];
+        for author in author_set.join_all().await {
+            authors_to_add.push(author);
+        }
 
         let mut state = app_state.write().unwrap();
-        state.loading_state = LoadingState::Loaded;
+
+        // Push all the authors in the global author cache
+        authors_to_add.into_iter().for_each(|a| {
+            state.cached_authors.insert(a.login.clone(), a);
+        });
 
         // handle review prs
         if !prs_review.is_empty() {
@@ -249,6 +337,8 @@ impl PullRequestWidget {
         {
             state.assignee_prs.table_state.select(Some(0));
         }
+
+        state.loading_state = LoadingState::Loaded;
     }
 
     fn on_err(app_state: Arc<RwLock<AppState>>, err: &octocrab::Error) {
@@ -495,7 +585,7 @@ impl Widget for &PullRequestWidget {
         // 4. Render Main Panels using state
         self.render_pr_list_panel(&mut state, prs_area, buf);
         self.render_details_panel(
-            &mut state.details,
+            &mut state,
             details_title_area,
             details_body_area,
             author_area,
@@ -564,12 +654,13 @@ impl PullRequestWidget {
 
     fn render_details_panel(
         &self,
-        details_state: &mut PullRequestsDetailsState,
+        state: &mut AppState,
         title_area: Rect,
         body_area: Rect,
         footer_area: Rect,
         buf: &mut Buffer,
     ) {
+        let details_state = &mut state.details;
         let title_block = block_with_title("Title");
         let details_block = block_with_title("Details");
         // Split the footer into different blocks
@@ -626,7 +717,14 @@ impl PullRequestWidget {
                 );
             }
 
-            Paragraph::new(&*pr_details.author)
+            // If we have the author in the cache, get it frm there
+            let author = if let Some(prof) = state.cached_authors.get(&pr_details.author) {
+                format!("{} ({})", prof.name, prof.login)
+            } else {
+                pr_details.author.clone()
+            };
+
+            Paragraph::new(author)
                 .block(author_block)
                 .wrap(Wrap { trim: true })
                 .render(footer_layout[0], buf);
@@ -694,20 +792,28 @@ impl PullRequestWidget {
             // Not searching: Render help text
             bottom_box = bottom_box.title("Help"); // Default title
 
+            let bottom_inner_parts =
+                Layout::horizontal([Constraint::Percentage(90), Constraint::Min(15)])
+                    .split(bottom_inner);
+
             // Render the block first
             bottom_box.render(area, buf);
 
             let loading_state = match state.loading_state {
-                LoadingState::Loading => "Loading... ".yellow(),
-                _ => "".into(),
+                LoadingState::Loading => "Loading... ".yellow().into_right_aligned_line(),
+                LoadingState::Idle | LoadingState::Loaded => {
+                    "Loaded ✔  ".green().into_right_aligned_line()
+                }
+                LoadingState::Error(_) => "Error ✗ ".red().into_right_aligned_line(),
             };
-            let help_line = Line::from(vec![
-                loading_state,
+
+            let help_line = Line::from(
                 "Scroll: ↑↓,j/k • Switch: TAB • Review: r • Keybindings: ? • Quit: q".green(),
-            ]);
+            );
 
             // Render help text inside the inner area
-            help_line.render(bottom_inner, buf);
+            help_line.render(bottom_inner_parts[0], buf);
+            loading_state.render(bottom_inner_parts[1], buf);
 
             // No cursor when showing help
             state.cursor_position = None;
@@ -722,7 +828,7 @@ impl PullRequestWidget {
             ])
         });
 
-        let area = centered_rect(screen_area, 20, 15, 35, 11); // Use the full screen_area for centering
+        let area = centered_rect(screen_area, 30, 20, 35, 12); // Use the full screen_area for centering
         let popup_block = block_with_title(" Keybindings ")
             .title_bottom(" Esc to close ")
             .borders(ratatui::widgets::Borders::ALL)
@@ -781,6 +887,16 @@ impl From<&OctoPullRequest> for PullRequest {
                 .unwrap_or_default(),
             mergeable: pr.mergeable.unwrap_or_default(),
             rebaseable: pr.rebaseable.unwrap_or_default(),
+        }
+    }
+}
+
+impl From<UserProfile> for Profile {
+    fn from(prof: UserProfile) -> Self {
+        Self {
+            id: prof.id.to_string(),
+            login: prof.login,
+            name: prof.name.unwrap_or_default(),
         }
     }
 }

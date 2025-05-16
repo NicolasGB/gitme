@@ -69,7 +69,7 @@ impl App {
     fn draw(&self, frame: &mut Frame) {
         let vertical = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]);
         let [title_area, body_area] = vertical.areas(frame.area());
-        let title = Line::from("GitMe PR").centered().bold();
+        let title = Line::from("GitMe").centered().bold();
         frame.render_widget(title, title_area);
         frame.render_widget(&self.pull_requests, body_area);
         // Here we need to render the cursor in it's position when we are searching since the api

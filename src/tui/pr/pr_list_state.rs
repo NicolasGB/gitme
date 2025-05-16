@@ -201,10 +201,10 @@ impl PullRequestsListState {
                     prefix = "└─";
                 }
                 rows.push(Row::new([format!(
-                    "  {} {} #{} - {}",
+                    "  {} #{} - {}{}",
                     prefix,
-                    if pr.is_draft { "📝" } else { "" },
                     pr.id,
+                    if pr.is_draft { "✏️ " } else { "" },
                     pr.title
                 )]));
             });
