@@ -1,4 +1,5 @@
 mod pr;
+mod utils;
 
 use color_eyre::Result;
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};

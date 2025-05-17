@@ -1,7 +1,7 @@
+mod pr_details_state;
 mod pr_list_state;
 
 use std::{
-    collections::HashMap,
     process::Command,
     sync::{Arc, RwLock},
 };
@@ -12,21 +12,21 @@ use octocrab::{
     models::UserProfile,
     params::{Direction, State},
 };
+use pr_details_state::PullRequestsDetailsState;
 use pr_list_state::PullRequestsListState;
 use ratatui::{
     buffer::Buffer,
-    layout::{Constraint, Flex, Layout, Position, Rect},
+    layout::{Constraint, Layout, Position, Rect},
     style::{Color, Style, Stylize},
-    text::{Line, Span},
-    widgets::{
-        Block, Cell, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState,
-        StatefulWidget, Table, Widget, Wrap, block::Title,
-    },
+    text::Line,
+    widgets::{Block, Cell, Paragraph, Row, Table, Widget, Wrap},
 };
 use tokio::task::JoinSet;
 use tui_input::{Input, backend::crossterm::EventHandler};
 
 use crate::config::Config;
+
+use super::utils;
 
 #[derive(Debug, Clone)]
 pub struct PullRequestWidget {
@@ -42,7 +42,6 @@ struct AppState {
     assignee_prs: PullRequestsListState,
 
     details: PullRequestsDetailsState,
-    cached_authors: HashMap<String, Profile>,
 
     loading_state: LoadingState,
     show_help: bool,
@@ -50,13 +49,6 @@ struct AppState {
     searching: bool,
     search: Input,
     cursor_position: Option<Position>,
-}
-
-#[derive(Debug, Default)]
-struct PullRequestsDetailsState {
-    pr_details: Option<PullRequest>,
-    body_scroll: u16,
-    scrollbar_state: ScrollbarState,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -93,42 +85,6 @@ enum LoadingState {
     Loading,
     Loaded,
     Error(String),
-}
-
-/// Helper function to create a centered rect using percentages.
-/// Ensures the rectangle has a minimum size, taking up more relative space
-/// if the provided area is small.
-fn centered_rect(
-    area: Rect,
-    percent_x: u16,
-    percent_y: u16,
-    min_width: u16,
-    min_height: u16,
-) -> Rect {
-    // Determine the final dimensions, ensuring they are at least the minimum
-    // and do not exceed the available area dimensions.
-    let target_width = (area.width as f32 * percent_x as f32 / 100.0) as u16;
-    let target_height = (area.height as f32 * percent_y as f32 / 100.0) as u16;
-
-    let final_width = target_width.max(min_width).min(area.width);
-    let final_height = target_height.max(min_height).min(area.height);
-
-    let vertical_layout = Layout::vertical([Constraint::Length(final_height)]).flex(Flex::Center);
-    let horizontal_layout =
-        Layout::horizontal([Constraint::Length(final_width)]).flex(Flex::Center);
-
-    let [centered_vertically] = vertical_layout.areas(area);
-    let [final_area] = horizontal_layout.areas(centered_vertically);
-
-    final_area
-}
-
-/// Helper function that returns a default block with borders with a given title
-fn block_with_title<'a>(title: impl Into<Title<'a>>) -> Block<'a> {
-    Block::default()
-        .title(title)
-        .borders(ratatui::widgets::Borders::ALL)
-        .border_type(ratatui::widgets::BorderType::Rounded)
 }
 
 const KEYBINDINGS: &[(&str, &str)] = &[
@@ -203,7 +159,7 @@ impl PullRequestWidget {
                 //Add the author from the cached authors
                 if let Some(user) = &pr.user {
                     // If the user is not in the cache request it's profile
-                    if !state.cached_authors.contains_key(&user.login) {
+                    if !state.details.cached_authors.contains_key(&user.login) {
                         let id = user.id;
                         author_set.spawn(async move {
                             let prof: Profile = octocrab::instance()
@@ -293,7 +249,7 @@ impl PullRequestWidget {
 
         // Push all the authors in the global author cache
         authors_to_add.into_iter().for_each(|a| {
-            state.cached_authors.insert(a.login.clone(), a);
+            state.details.cached_authors.insert(a.login.clone(), a);
         });
 
         // handle review prs
@@ -371,39 +327,32 @@ impl PullRequestWidget {
         prs_state.scroll_down();
 
         // If a pr is selected make it available in the details
-        state.details.pr_details = prs_state.find_selected().cloned();
-        state.details.body_scroll = 0;
-        state.details.scrollbar_state = ScrollbarState::default();
+        let pr = prs_state.find_selected().cloned();
+        state.details.set_pull_request(pr);
     }
 
     pub fn scroll_up(&self) {
         let mut state = self.state.write().unwrap();
         let prs_state = Self::get_active_prs_state_mut(&mut state);
         prs_state.scroll_up();
-
-        state.details.pr_details = prs_state.find_selected().cloned();
-        state.details.body_scroll = 0;
-        state.details.scrollbar_state = ScrollbarState::default();
+        let pr = prs_state.find_selected().cloned();
+        state.details.set_pull_request(pr);
     }
 
     pub fn jump_up(&self) {
         let mut state = self.state.write().unwrap();
         let prs_state = Self::get_active_prs_state_mut(&mut state);
         prs_state.jump_up();
-
-        state.details.pr_details = prs_state.find_selected().cloned();
-        state.details.body_scroll = 0;
-        state.details.scrollbar_state = ScrollbarState::default();
+        let pr = prs_state.find_selected().cloned();
+        state.details.set_pull_request(pr);
     }
 
     pub fn jump_down(&self) {
         let mut state = self.state.write().unwrap();
         let prs_state = Self::get_active_prs_state_mut(&mut state);
         prs_state.jump_down();
-
-        state.details.pr_details = prs_state.find_selected().cloned();
-        state.details.body_scroll = 0;
-        state.details.scrollbar_state = ScrollbarState::default();
+        let pr = prs_state.find_selected().cloned();
+        state.details.set_pull_request(pr);
     }
 
     pub fn next_repository(&self) {
@@ -411,10 +360,8 @@ impl PullRequestWidget {
         let prs_state = Self::get_active_prs_state_mut(&mut state);
 
         prs_state.next_repository();
-
-        state.details.pr_details = prs_state.find_selected().cloned();
-        state.details.body_scroll = 0;
-        state.details.scrollbar_state = ScrollbarState::default();
+        let pr = prs_state.find_selected().cloned();
+        state.details.set_pull_request(pr);
     }
 
     pub fn previous_repository(&self) {
@@ -422,10 +369,8 @@ impl PullRequestWidget {
         let prs_state = Self::get_active_prs_state_mut(&mut state);
 
         prs_state.previous_repository();
-
-        state.details.pr_details = prs_state.find_selected().cloned();
-        state.details.body_scroll = 0;
-        state.details.scrollbar_state = ScrollbarState::default();
+        let pr = prs_state.find_selected().cloned();
+        state.details.set_pull_request(pr);
     }
 
     pub fn scroll_details_down(&self) {
@@ -467,7 +412,8 @@ impl PullRequestWidget {
             }
         };
 
-        state.details.pr_details = prs_state.find_selected().cloned();
+        let pr = prs_state.find_selected().cloned();
+        state.details.pr_details = pr;
     }
 
     pub fn open(&self) {
@@ -571,10 +517,8 @@ impl PullRequestWidget {
 
 impl Widget for &PullRequestWidget {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        // 1. Calculate Layout (could be a helper function)
+        // 1. Calculate Layout
         let (prs_area, details_area, footer_area) = self.calculate_main_layout(area);
-        let (details_title_area, details_body_area, author_area) =
-            self.calculate_details_layout(details_area);
 
         // 2. Acquire Lock
         let mut state = self.state.write().unwrap();
@@ -584,13 +528,7 @@ impl Widget for &PullRequestWidget {
 
         // 4. Render Main Panels using state
         self.render_pr_list_panel(&mut state, prs_area, buf);
-        self.render_details_panel(
-            &mut state,
-            details_title_area,
-            details_body_area,
-            author_area,
-            buf,
-        );
+        state.details.render(details_area, buf);
 
         // 5. Render Popups if needed
         if state.show_help {
@@ -614,13 +552,6 @@ impl PullRequestWidget {
         (prs_layout[0], prs_layout[1], base_layout[1])
     }
 
-    fn calculate_details_layout(&self, details_area: Rect) -> (Rect, Rect, Rect) {
-        let details_layout =
-            Layout::vertical([Constraint::Max(3), Constraint::Min(10), Constraint::Max(3)])
-                .split(details_area);
-        (details_layout[0], details_layout[1], details_layout[2])
-    }
-
     fn render_pr_list_panel(&self, state: &mut AppState, area: Rect, buf: &mut Buffer) {
         // Build title line based on state.active_panel
         let review_requested = if state.active_panel == ActivePanel::PullRequestsToReview {
@@ -635,7 +566,7 @@ impl PullRequestWidget {
         };
         let title_line = Line::from(vec!["📋 ".into(), review_requested, " - ".into(), my_prs]);
 
-        let mut prs_block = block_with_title(title_line);
+        let mut prs_block = utils::block_with_title(title_line);
 
         // If we're not searching we are focused on the panel block
         if !state.searching {
@@ -650,104 +581,6 @@ impl PullRequestWidget {
                 state.assignee_prs.render_table(prs_block, area, buf);
             }
         };
-    }
-
-    fn render_details_panel(
-        &self,
-        state: &mut AppState,
-        title_area: Rect,
-        body_area: Rect,
-        footer_area: Rect,
-        buf: &mut Buffer,
-    ) {
-        let details_state = &mut state.details;
-        let title_block = block_with_title("Title");
-        let details_block = block_with_title("Details");
-        // Split the footer into different blocks
-        let footer_layout = Layout::horizontal([
-            Constraint::Min(30),
-            Constraint::Max(13),
-            Constraint::Max(13),
-        ])
-        .split(footer_area);
-
-        let author_block = block_with_title("Author");
-        let mergeable_block = block_with_title("Mergeable");
-        let rebaseable_block = block_with_title("Rebaseable");
-
-        let get_status_span = |value: bool| {
-            if value {
-                Span::styled("Yes", Style::default().fg(Color::Green))
-            } else {
-                Span::styled("No", Style::default().fg(Color::Red))
-            }
-        };
-
-        if let Some(pr_details) = &details_state.pr_details {
-            Paragraph::new(&*pr_details.title)
-                .block(title_block)
-                .wrap(Wrap { trim: true })
-                .render(title_area, buf);
-
-            // let body_content = tui_markdown::from_str(&pr_details.body);
-            let body_inner = details_block.inner(body_area);
-            let body_paragraph = Paragraph::new(&*pr_details.body)
-                .block(details_block)
-                .wrap(Wrap { trim: true })
-                .scroll((details_state.body_scroll, 0));
-
-            body_paragraph.render(body_area, buf);
-
-            // Check if there needs to be a scrollbar displayed meaning that the total lines
-            // wrapped  are greater than the inner body viewport
-            let wrapped_lines = textwrap::wrap(&pr_details.body, body_inner.width as usize);
-            let total_lines_after_wrapping = wrapped_lines.len();
-            let viewport_height = body_inner.height as usize;
-
-            if total_lines_after_wrapping > viewport_height {
-                details_state.scrollbar_state = details_state
-                    .scrollbar_state
-                    .content_length(total_lines_after_wrapping)
-                    .viewport_content_length(viewport_height);
-
-                Scrollbar::new(ScrollbarOrientation::VerticalRight).render(
-                    body_area,
-                    buf,
-                    &mut details_state.scrollbar_state,
-                );
-            }
-
-            // If we have the author in the cache, get it frm there
-            let author = if let Some(prof) = state.cached_authors.get(&pr_details.author) {
-                format!("{} ({})", prof.name, prof.login)
-            } else {
-                pr_details.author.clone()
-            };
-
-            Paragraph::new(author)
-                .block(author_block)
-                .wrap(Wrap { trim: true })
-                .render(footer_layout[0], buf);
-
-            let mergeable_span = get_status_span(pr_details.mergeable);
-            Paragraph::new(mergeable_span)
-                .block(mergeable_block)
-                .wrap(Wrap { trim: true })
-                .render(footer_layout[1], buf);
-
-            let rebaseable_span = get_status_span(pr_details.rebaseable);
-            Paragraph::new(rebaseable_span)
-                .block(rebaseable_block)
-                .wrap(Wrap { trim: true })
-                .render(footer_layout[2], buf);
-        } else {
-            // Render the empty blocks
-            title_block.render(title_area, buf);
-            details_block.render(body_area, buf);
-            author_block.render(footer_layout[0], buf);
-            mergeable_block.render(footer_layout[1], buf);
-            rebaseable_block.render(footer_layout[2], buf);
-        }
     }
 
     fn render_footer(&self, state: &mut AppState, area: Rect, buf: &mut Buffer) {
@@ -828,8 +661,8 @@ impl PullRequestWidget {
             ])
         });
 
-        let area = centered_rect(screen_area, 30, 20, 35, 12); // Use the full screen_area for centering
-        let popup_block = block_with_title(" Keybindings ")
+        let area = utils::centered_rect(screen_area, 30, 20, 35, 12); // Use the full screen_area for centering
+        let popup_block = utils::block_with_title(" Keybindings ")
             .title_bottom(" Esc to close ")
             .borders(ratatui::widgets::Borders::ALL)
             .border_style(Style::default().fg(Color::LightCyan)); // Theming
@@ -843,7 +676,7 @@ impl PullRequestWidget {
     }
 
     fn render_error_popup(&self, err_msg: &str, screen_area: Rect, buf: &mut Buffer) {
-        let popup_block = block_with_title(" Errors ")
+        let popup_block = utils::block_with_title(" Errors ")
             .title_bottom(" q to quit ")
             .borders(ratatui::widgets::Borders::ALL)
             .border_style(Style::default().fg(Color::Red)); // Theming
@@ -853,7 +686,7 @@ impl PullRequestWidget {
             .centered()
             .wrap(Wrap { trim: true });
 
-        let area = centered_rect(screen_area, 30, 20, 30, 10); // Use the full screen_area for centering
+        let area = utils::centered_rect(screen_area, 30, 20, 30, 10); // Use the full screen_area for centering
         ratatui::widgets::Clear.render(area, buf);
         error_paragraph.render(area, buf);
     }
