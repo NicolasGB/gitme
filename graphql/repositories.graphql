@@ -1,0 +1,86 @@
+query RepositoryView($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+    name
+    url
+    pullRequests(first: 100, states: [OPEN]) {
+      edges {
+        node {
+          baseRefName
+          headRefName
+          number
+          title
+          author {
+            __typename
+            login
+            ... on User {
+              name
+            }
+          }
+          assignees(first: 10) {
+            edges {
+              node {
+                login
+              }
+            }
+          }
+          reviewRequests(first: 10) {
+             edges {
+               node {
+                 requestedReviewer{
+                     __typename
+                     ... on  User {
+                       login
+                       name
+                     }
+                  } 
+               }
+             }
+          }
+          reviews(first: 30) {
+            edges {
+              node {
+                author {
+                  __typename
+                  login
+                  ... on User {
+                    name
+                  }
+                }
+                state
+                body
+                comments(first: 30){
+                  edges {
+                    node {
+                      body
+                      author {
+                        __typename
+                        ... on User {
+                          name
+                        }
+                      }
+                    }
+                  }
+                }
+                submittedAt
+              }
+            }
+          }
+          comments(first: 10) {
+            edges{
+              node {
+                author {
+                  __typename
+                  login
+                  ... on User {
+                    name
+                  }
+                }
+                body
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

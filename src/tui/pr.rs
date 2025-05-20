@@ -24,7 +24,7 @@ use ratatui::{
 use tokio::task::JoinSet;
 use tui_input::{Input, backend::crossterm::EventHandler};
 
-use crate::config::Config;
+use crate::{config::Config, github};
 
 use super::utils;
 
@@ -129,6 +129,8 @@ impl PullRequestWidget {
             .direction(Direction::Descending)
             .send()
             .await;
+
+        let test = github::instance().pulls(&owner, &repo).await;
 
         match pulls {
             Ok(page) => Self::on_load(app_state, username.as_ref(), &page, owner, repo).await,
@@ -496,6 +498,8 @@ impl PullRequestWidget {
         });
     }
 
+    /// Clears the current search query and resets any filters
+    /// applied to the pull request lists.
     pub fn clear_search(&self) {
         let mut state = self.state.write().unwrap();
         state.search.reset();
