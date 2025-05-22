@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::types::Repository;
 use color_eyre::{
     Result,
     eyre::{Context, OptionExt, bail},
@@ -9,7 +10,8 @@ use once_cell::sync::Lazy;
 use repository_view::ResponseData;
 use reqwest::Client;
 
-pub use repository_view::RepositoryViewRepository;
+// Reexport for From impls
+pub use repository_view::*;
 
 /// Type alias for a string representing a DateTime.
 type DateTime = String;
@@ -87,7 +89,11 @@ impl GithubClient {
     /// - `Ok(Some(repository))` if the repository is found.
     /// - `Ok(None)` if the repository is not found.
     /// - `Err(error)` if there was an issue fetching the data.
-    pub async fn pulls(&self, owner: &str, name: &str) -> Result<Option<RepositoryViewRepository>> {
+    pub async fn repository_and_pulls(
+        &self,
+        owner: &str,
+        name: &str,
+    ) -> Result<Option<Repository>> {
         let variables = repository_view::Variables {
             owner: owner.to_string(),
             name: name.to_string(),
@@ -117,6 +123,6 @@ impl GithubClient {
 
         let response_data = reqwest_response.data.ok_or_eyre("Missing response data")?;
 
-        Ok(response_data.repository)
+        Ok(response_data.repository.map(Repository::from))
     }
 }

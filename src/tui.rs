@@ -48,12 +48,11 @@ impl App {
     }
 
     pub async fn run(mut self, mut terminal: DefaultTerminal) -> Result<()> {
-        self.pull_requests.run();
         let period = Duration::from_secs_f32(1.0 / Self::FRAMES_PER_SECOND);
         let mut interval = tokio::time::interval(period);
         let mut events = EventStream::new();
 
-        let mut refresh_interval = tokio::time::interval(Duration::from_secs_f32(30_f32));
+        let mut refresh_interval = tokio::time::interval(Duration::from_secs_f32(60_f32));
 
         while !self.should_quit {
             tokio::select! {

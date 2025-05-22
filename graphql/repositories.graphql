@@ -2,13 +2,20 @@ query RepositoryView($owner: String!, $name: String!) {
   repository(owner: $owner, name: $name) {
     name
     url
-    pullRequests(first: 100, states: [OPEN]) {
+    pullRequests(first: 20, states: [OPEN]) {
       edges {
         node {
+          baseRepository {
+            name
+            url
+          }
           baseRefName
           headRefName
+          url
           number
           title
+          body
+          isDraft
           author {
             __typename
             login
@@ -16,14 +23,14 @@ query RepositoryView($owner: String!, $name: String!) {
               name
             }
           }
-          assignees(first: 10) {
+          assignees(first: 5) {
             edges {
               node {
                 login
               }
             }
           }
-          reviewRequests(first: 10) {
+          reviewRequests(first: 5) {
              edges {
                node {
                  requestedReviewer{
@@ -36,7 +43,7 @@ query RepositoryView($owner: String!, $name: String!) {
                }
              }
           }
-          reviews(first: 30) {
+          reviews(first: 10) {
             edges {
               node {
                 author {
@@ -48,7 +55,7 @@ query RepositoryView($owner: String!, $name: String!) {
                 }
                 state
                 body
-                comments(first: 30){
+                comments(first: 10){
                   edges {
                     node {
                       body

@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use crate::tui::utils;
 use ratatui::{
     buffer::Buffer,
@@ -11,7 +9,7 @@ use ratatui::{
     },
 };
 
-use super::{Profile, PullRequest};
+use crate::types::PullRequest;
 
 #[derive(Debug, Default, PartialOrd, PartialEq)]
 enum ActivePanel {
@@ -26,7 +24,6 @@ pub struct PullRequestsDetailsState {
     pub pr_details: Option<PullRequest>,
     pub body_scroll: u16,
     pub scrollbar_state: ScrollbarState,
-    pub cached_authors: HashMap<String, Profile>,
 }
 
 impl PullRequestsDetailsState {
@@ -115,24 +112,20 @@ impl PullRequestsDetailsState {
             }
 
             // If we have the author in the cache, get it frm there
-            let author = if let Some(prof) = self.cached_authors.get(&pr_details.author) {
-                format!("{} ({})", prof.name, prof.login)
-            } else {
-                pr_details.author.clone()
-            };
-
+            let author = utils::format_user(&pr_details.author);
             Paragraph::new(author)
                 .block(author_block)
                 .wrap(Wrap { trim: true })
                 .render(footer_layout[0], buf);
 
-            let mergeable_span = get_status_span(pr_details.mergeable);
+            // TODO: Remove this as the api is crap and doesn't return it as expected :(
+            let mergeable_span = get_status_span(false);
             Paragraph::new(mergeable_span)
                 .block(mergeable_block)
                 .wrap(Wrap { trim: true })
                 .render(footer_layout[1], buf);
 
-            let rebaseable_span = get_status_span(pr_details.rebaseable);
+            let rebaseable_span = get_status_span(false);
             Paragraph::new(rebaseable_span)
                 .block(rebaseable_block)
                 .wrap(Wrap { trim: true })

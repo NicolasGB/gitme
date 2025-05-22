@@ -6,12 +6,8 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use color_eyre::eyre::Report;
 use crossterm::event::Event;
-use octocrab::{
-    Page,
-    models::UserProfile,
-    params::{Direction, State},
-};
 use pr_details_state::PullRequestsDetailsState;
 use pr_list_state::PullRequestsListState;
 use ratatui::{
@@ -21,10 +17,9 @@ use ratatui::{
     text::Line,
     widgets::{Block, Cell, Paragraph, Row, Table, Widget, Wrap},
 };
-use tokio::task::JoinSet;
 use tui_input::{Input, backend::crossterm::EventHandler};
 
-use crate::{config::Config, github};
+use crate::{config::Config, github, types::Repository};
 
 use super::utils;
 
@@ -49,26 +44,6 @@ struct AppState {
     searching: bool,
     search: Input,
     cursor_position: Option<Position>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct PullRequest {
-    id: String,
-    title: String,
-    url: String,
-    repo: String,
-    body: String,
-    author: String,
-    is_draft: bool,
-    mergeable: bool,
-    rebaseable: bool,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct Profile {
-    id: String,
-    login: String,
-    name: String,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd)]
@@ -114,7 +89,7 @@ impl PullRequestWidget {
         self.refresh_pull_requests();
     }
 
-    async fn fetch_pulls(
+    async fn fetch_pulls_gql(
         app_state: Arc<RwLock<AppState>>,
         username: Option<String>,
         owner: String,
@@ -122,151 +97,68 @@ impl PullRequestWidget {
     ) {
         Self::set_loading_state(Arc::clone(&app_state), LoadingState::Loading);
 
-        let pulls = octocrab::instance()
-            .pulls(&owner, &repo)
-            .list()
-            .state(State::Open)
-            .direction(Direction::Descending)
-            .send()
-            .await;
-
-        let test = github::instance().pulls(&owner, &repo).await;
+        let pulls = github::instance().repository_and_pulls(&owner, &repo).await;
 
         match pulls {
-            Ok(page) => Self::on_load(app_state, username.as_ref(), &page, owner, repo).await,
-            Err(err) => Self::on_err(app_state, &err),
+            Ok(Some(resp)) => Self::on_load(app_state, username.as_ref(), resp, repo).await,
+            Err(err) => Self::on_err(app_state, err),
+            _ => {}
         }
     }
 
-    // On a load of prs received, pushes them in their corresponding map entry in the prs state
+    fn on_err(app_state: Arc<RwLock<AppState>>, err: Report) {
+        //TODO: Improve this if multiple errors come they should be appended
+        Self::set_loading_state(app_state, LoadingState::Error(err.to_string()));
+    }
+
     async fn on_load(
         app_state: Arc<RwLock<AppState>>,
         username: Option<&String>,
-        page: &Page<OctoPullRequest>,
-        owner: String,
-        repo: String,
+        repository: Repository,
+        repo_name: String,
     ) {
         let mut prs_review = vec![];
         let mut prs_assignee = vec![];
-        let mut reviews_set = JoinSet::new();
-        let mut author_set = JoinSet::new();
 
-        for pr in page.items.iter() {
-            // Transform the pr to our domain
-            let pr_to_push: PullRequest = pr.into();
-
-            // Check if the author of this pr is already in cache or we need to fetch it
-            {
-                let state = app_state.read().unwrap();
-                //Add the author from the cached authors
-                if let Some(user) = &pr.user {
-                    // If the user is not in the cache request it's profile
-                    if !state.details.cached_authors.contains_key(&user.login) {
-                        let id = user.id;
-                        author_set.spawn(async move {
-                            let prof: Profile = octocrab::instance()
-                                .users_by_id(id)
-                                .profile()
-                                .await
-                                .unwrap()
-                                .into();
-                            prof
-                        });
-                    }
-                }
-            }
-
-            // If an username is set in the config, try and fetch reviews/assignees
+        for pr in repository.pull_requests {
             if let Some(username) = username {
                 // Check if we are assignee
-                if let Some(assignees) = &pr.assignees {
-                    if assignees.iter().any(|e| e.login == *username) {
-                        prs_assignee.push(pr_to_push);
-                        // Would be very weird to be assignee and reviewer
-                        // as of now we're gonna skip if we are assignee maybe i'll come back to
-                        // this decision at some poit
-                        continue;
-                    }
+                if pr.assignees.iter().any(|e| e.login == *username) {
+                    prs_assignee.push(pr);
+                    // If we're assignee we continue since it makes no sense to also be reviewer of
+                    // this same one
+                    continue;
                 }
 
                 // Check if we are reviewers
-                if let Some(reviewers) = &pr.requested_reviewers {
-                    // If the reviewer is requested and has not yet been reviewed push the pr
-                    if reviewers.iter().any(|e| e.login == *username) {
-                        prs_review.push(pr_to_push);
-                        // Go to next iteration
-                        continue;
-                    }
-                }
-
-                // Otherwise we might have reviewed already but the pr is still open
-                // For reference of the doc:
+                // Being a reviewer means we're either currently requested or we have made a review
+                //
+                // For reference of the doc (GITHUB DOC):
                 // Gets the users or teams whose review is requested for a pull request.
                 // Once a requested reviewer submits a review, they are no longer considered a requested reviewer.
-
-                // Therefore we are going to request another endpoint to make sure we are not
-                // reviewers of the pr (assuming if we have submited a review we are a reviewer)
-                let owner = owner.clone();
-                let repo = repo.clone();
-                let number = pr.number;
-                reviews_set.spawn(async move {
-                    (
-                        octocrab::instance()
-                            .pulls(owner, repo)
-                            .list_reviews(number)
-                            .send()
-                            .await,
-                        pr_to_push,
-                    )
-                });
-            }
-        }
-
-        for (reviews, pr) in reviews_set.join_all().await {
-            match reviews {
-                Ok(page) => {
-                    if page.items.iter().any(|r| {
-                        if let Some(u) = &r.user {
-                            if let Some(username) = username {
-                                return u.login == *username;
-                            }
-                        }
-                        false
-                    }) {
-                        // If found append the pr to the reviewwers
-                        prs_review.push(pr);
-                    }
+                if pr.review_requests.iter().any(|u| u.login == *username)
+                    || pr.reviews.iter().any(|r| r.author.login == *username)
+                {
+                    prs_review.push(pr);
                 }
-                // If error set it and return
-                Err(err) => return Self::on_err(app_state, &err),
             }
         }
 
-        let mut authors_to_add = vec![];
-        for author in author_set.join_all().await {
-            authors_to_add.push(author);
-        }
-
+        // Aquire the state
         let mut state = app_state.write().unwrap();
-
-        // Push all the authors in the global author cache
-        authors_to_add.into_iter().for_each(|a| {
-            state.details.cached_authors.insert(a.login.clone(), a);
-        });
-
         // handle review prs
         if !prs_review.is_empty() {
             // Get  the review repo and clear previous entries
             let review_repo = state
                 .review_prs
                 .grouped_prs
-                .entry(repo.clone())
+                .entry(repo_name.clone())
                 .or_default();
 
             review_repo.clear();
             review_repo.extend(prs_review);
         } else {
-            let _ = state.review_prs.grouped_prs.remove(&repo);
+            let _ = state.review_prs.grouped_prs.remove(&repo_name);
         }
         // Update the view
         state.review_prs.update_view();
@@ -280,11 +172,11 @@ impl PullRequestWidget {
 
         if !prs_assignee.is_empty() {
             // Now do the same for assigned
-            let assignee_repo = state.assignee_prs.grouped_prs.entry(repo).or_default();
+            let assignee_repo = state.assignee_prs.grouped_prs.entry(repo_name).or_default();
             assignee_repo.clear();
             assignee_repo.extend(prs_assignee);
         } else {
-            let _ = state.assignee_prs.grouped_prs.remove(&repo);
+            let _ = state.assignee_prs.grouped_prs.remove(&repo_name);
         }
         // Update the view
         state.assignee_prs.update_view();
@@ -297,16 +189,6 @@ impl PullRequestWidget {
         }
 
         state.loading_state = LoadingState::Loaded;
-    }
-
-    fn on_err(app_state: Arc<RwLock<AppState>>, err: &octocrab::Error) {
-        let error_message = match err {
-            octocrab::Error::GitHub { source, .. } => source.message.clone(),
-            // Fallback to display
-            _ => format!("{}", err),
-        };
-
-        Self::set_loading_state(app_state, LoadingState::Error(error_message));
     }
 
     fn set_loading_state(app_state: Arc<RwLock<AppState>>, state: LoadingState) {
@@ -437,8 +319,11 @@ impl PullRequestWidget {
         if let ActivePanel::PullRequestsToReview = state.active_panel {
             if let Some(pr) = state.review_prs.find_selected() {
                 // TODO: handle missing paths or config repo
-                if let Some(config_repo) =
-                    self.config.repositories.iter().find(|r| r.name == pr.repo)
+                if let Some(config_repo) = self
+                    .config
+                    .repositories
+                    .iter()
+                    .find(|r| r.name == pr.base_repo.url)
                 {
                     let cmd = self.config.command.clone().unwrap_or_else(|| {
                         std::env::var("TERMINAL").unwrap_or_else(|_| "ghostty".to_string())
@@ -494,7 +379,7 @@ impl PullRequestWidget {
             let username = self.config.username.clone();
             let owner = r.owner.clone();
             let repo = r.name.clone();
-            tokio::spawn(Self::fetch_pulls(state, username, owner, repo));
+            tokio::spawn(Self::fetch_pulls_gql(state, username, owner, repo));
         });
     }
 
@@ -693,54 +578,5 @@ impl PullRequestWidget {
         let area = utils::centered_rect(screen_area, 30, 20, 30, 10); // Use the full screen_area for centering
         ratatui::widgets::Clear.render(area, buf);
         error_paragraph.render(area, buf);
-    }
-}
-
-type OctoPullRequest = octocrab::models::pulls::PullRequest;
-
-impl From<&OctoPullRequest> for PullRequest {
-    fn from(pr: &OctoPullRequest) -> Self {
-        Self {
-            id: pr.number.to_string(),
-            title: pr.title.as_ref().unwrap().to_string(),
-            url: pr
-                .html_url
-                .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_default(),
-            repo: pr.base.repo.as_ref().unwrap().name.clone(),
-            body: pr.body.as_ref().cloned().unwrap_or_default(),
-            is_draft: pr.draft.unwrap_or_default(),
-            author: pr
-                .user
-                .as_ref()
-                .map(|a| {
-                    if let Some(email) = &a.email {
-                        format!("{} - {}", a.login, email)
-                    } else {
-                        a.login.clone()
-                    }
-                })
-                .unwrap_or_default(),
-            mergeable: pr.mergeable.unwrap_or_default(),
-            rebaseable: pr.rebaseable.unwrap_or_default(),
-        }
-    }
-}
-
-impl From<UserProfile> for Profile {
-    fn from(prof: UserProfile) -> Self {
-        Self {
-            id: prof.id.to_string(),
-            login: prof.login,
-            name: prof.name.unwrap_or_default(),
-        }
-    }
-}
-
-impl From<&PullRequest> for Row<'_> {
-    fn from(pr: &PullRequest) -> Self {
-        let pr = pr.clone();
-        Row::new(vec![pr.id, pr.title, pr.repo])
     }
 }
