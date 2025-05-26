@@ -106,7 +106,7 @@ impl PullRequestsListState {
     fn find_by_index(&self, index: usize) -> Option<&PullRequest> {
         let mut current_index = 0;
 
-        for (_repo, prs) in self.grouped_prs.iter() {
+        for (_repo, prs) in self.filtered_prs.iter() {
             if current_index == index {
                 // Here we're returning none, since it matches a header row
                 return None;

@@ -1,15 +1,19 @@
 #![allow(unused)]
 
 use crate::github::{
-    self, RepositoryViewRepository, RepositoryViewRepositoryPullRequestsEdgesNode,
+    PullRequestReviewState, RepositoryViewRepository,
+    RepositoryViewRepositoryPullRequestsEdgesNode,
     RepositoryViewRepositoryPullRequestsEdgesNodeAssigneesEdgesNode,
     RepositoryViewRepositoryPullRequestsEdgesNodeAuthor,
+    RepositoryViewRepositoryPullRequestsEdgesNodeAuthorOn,
     RepositoryViewRepositoryPullRequestsEdgesNodeBaseRepository,
     RepositoryViewRepositoryPullRequestsEdgesNodeCommentsEdgesNode,
     RepositoryViewRepositoryPullRequestsEdgesNodeCommentsEdgesNodeAuthor,
+    RepositoryViewRepositoryPullRequestsEdgesNodeCommentsEdgesNodeAuthorOn,
     RepositoryViewRepositoryPullRequestsEdgesNodeReviewRequestsEdgesNodeRequestedReviewer,
     RepositoryViewRepositoryPullRequestsEdgesNodeReviewsEdgesNode,
     RepositoryViewRepositoryPullRequestsEdgesNodeReviewsEdgesNodeAuthor,
+    RepositoryViewRepositoryPullRequestsEdgesNodeReviewsEdgesNodeAuthorOn,
     RepositoryViewRepositoryPullRequestsEdgesNodeReviewsEdgesNodeCommentsEdgesNode,
     RepositoryViewRepositoryPullRequestsEdgesNodeReviewsEdgesNodeCommentsEdgesNodeAuthor,
 };
@@ -145,7 +149,7 @@ impl From<RepositoryViewRepositoryPullRequestsEdgesNode> for PullRequest {
 impl From<RepositoryViewRepositoryPullRequestsEdgesNodeAuthor> for User {
     fn from(author: RepositoryViewRepositoryPullRequestsEdgesNodeAuthor) -> Self {
         let name = match author.on {
-            github::RepositoryViewRepositoryPullRequestsEdgesNodeAuthorOn::User(on_user) => {
+            RepositoryViewRepositoryPullRequestsEdgesNodeAuthorOn::User(on_user) => {
                 on_user.name.unwrap_or_default()
             }
             _ => "".to_string(),
@@ -179,12 +183,12 @@ impl From<RepositoryViewRepositoryPullRequestsEdgesNodeReviewRequestsEdgesNodeRe
 impl From<RepositoryViewRepositoryPullRequestsEdgesNodeReviewsEdgesNode> for Review {
     fn from(review: RepositoryViewRepositoryPullRequestsEdgesNodeReviewsEdgesNode) -> Self {
         let state = match &review.state {
-            github::PullRequestReviewState::APPROVED => "APPROVED",
-            github::PullRequestReviewState::CHANGES_REQUESTED => "CHANGES REQUESTED",
-            github::PullRequestReviewState::COMMENTED => "COMMENTED",
-            github::PullRequestReviewState::DISMISSED => "DISMISSED",
-            github::PullRequestReviewState::PENDING => "PENDING",
-            github::PullRequestReviewState::Other(a) => a.as_str(),
+            PullRequestReviewState::APPROVED => "APPROVED",
+            PullRequestReviewState::CHANGES_REQUESTED => "CHANGES REQUESTED",
+            PullRequestReviewState::COMMENTED => "COMMENTED",
+            PullRequestReviewState::DISMISSED => "DISMISSED",
+            PullRequestReviewState::PENDING => "PENDING",
+            PullRequestReviewState::Other(a) => a.as_str(),
         };
 
         Review {
@@ -207,9 +211,9 @@ impl From<RepositoryViewRepositoryPullRequestsEdgesNodeReviewsEdgesNode> for Rev
 impl From<RepositoryViewRepositoryPullRequestsEdgesNodeReviewsEdgesNodeAuthor> for User {
     fn from(author: RepositoryViewRepositoryPullRequestsEdgesNodeReviewsEdgesNodeAuthor) -> Self {
         let name = match author.on {
-            github::RepositoryViewRepositoryPullRequestsEdgesNodeReviewsEdgesNodeAuthorOn::User(
-                u,
-            ) => u.name.unwrap_or_default(),
+            RepositoryViewRepositoryPullRequestsEdgesNodeReviewsEdgesNodeAuthorOn::User(u) => {
+                u.name.unwrap_or_default()
+            }
             _ => "".to_string(),
         };
         User {
@@ -268,9 +272,9 @@ impl From<RepositoryViewRepositoryPullRequestsEdgesNodeAssigneesEdgesNode> for U
 impl From<RepositoryViewRepositoryPullRequestsEdgesNodeCommentsEdgesNodeAuthor> for User {
     fn from(author: RepositoryViewRepositoryPullRequestsEdgesNodeCommentsEdgesNodeAuthor) -> Self {
         let name = match author.on {
-            github::RepositoryViewRepositoryPullRequestsEdgesNodeCommentsEdgesNodeAuthorOn::User(on_user) => {
-                on_user.name.unwrap_or_default()
-            }
+            RepositoryViewRepositoryPullRequestsEdgesNodeCommentsEdgesNodeAuthorOn::User(
+                on_user,
+            ) => on_user.name.unwrap_or_default(),
             _ => "".to_string(),
         };
         User {
