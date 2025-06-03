@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use color_eyre::Result;
 
-use crate::{config, tui};
+use crate::{config, github, tui};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -25,11 +25,8 @@ impl GitMe {
         let mut gitme_config = config::Config::new()?;
 
         // Initialise octocrab
-        let token = gitme_config.api_key.as_ref().cloned();
-        let config = octocrab::OctocrabBuilder::new()
-            .user_access_token(token.unwrap_or_default())
-            .build()?;
-        octocrab::initialise(config);
+        let token = gitme_config.api_key.as_ref().cloned().unwrap_or_default();
+        github::initialise(&token)?;
 
         match cli.command {
             Some(a) => match a {

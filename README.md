@@ -107,6 +107,14 @@ gitme
     cargo run
     ```
 
+## Useful information
+
+This application uses the GitHub GraphQL API, which enforces rate limits based on a point system. Each query has a calculated point cost depending on its structure and pagination arguments (e.g., `first: 20`). If you exceed your rate limit, further requests will be temporarily blocked.
+
+You can estimate the cost of a query by summing the number of requests needed for each unique connection, dividing by 100, and rounding to the nearest whole number (minimum 1 point per query). For example, the default query in `repositories.graphql` costs 3 points per call.
+
+See the [GitHub GraphQL API docs](https://docs.github.com/en/graphql/overview/resource-limitations) for more details.
+
 ## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE.md](LICENSE) file for details.
@@ -118,6 +126,9 @@ This project is licensed under the MIT License - see the [LICENSE.md](LICENSE) f
 - [x] Refetch on demand
 - [x] Add better keybindings such as `(n/p)` for navigation through repositories
 - [x] Manage config(s) through CLI commands (Partially done)
+- [x] Migrate to Github's GQL API
+- [ ] Allow for user defined in GQL request to allow the user to adjust for API rate limits
+- [ ] Allow for user defined ticking to fetch data from Github
 - [ ] Copy pr links directly with `y` binding
 - [ ] Add review history in details view
 - [ ] Open repositories and not just PRs

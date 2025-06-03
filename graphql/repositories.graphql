@@ -1,0 +1,93 @@
+query RepositoryView($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+    name
+    url
+    pullRequests(first: 20, states: [OPEN]) {
+      edges {
+        node {
+          baseRepository {
+            name
+            url
+          }
+          baseRefName
+          headRefName
+          url
+          number
+          title
+          body
+          isDraft
+          author {
+            __typename
+            login
+            ... on User {
+              name
+            }
+          }
+          assignees(first: 5) {
+            edges {
+              node {
+                login
+              }
+            }
+          }
+          reviewRequests(first: 5) {
+             edges {
+               node {
+                 requestedReviewer{
+                     __typename
+                     ... on  User {
+                       login
+                       name
+                     }
+                  } 
+               }
+             }
+          }
+          reviews(first: 10) {
+            edges {
+              node {
+                author {
+                  __typename
+                  login
+                  ... on User {
+                    name
+                  }
+                }
+                state
+                body
+                comments(first: 10){
+                  edges {
+                    node {
+                      body
+                      author {
+                        __typename
+                        ... on User {
+                          name
+                        }
+                      }
+                    }
+                  }
+                }
+                submittedAt
+              }
+            }
+          }
+          comments(first: 10) {
+            edges{
+              node {
+                author {
+                  __typename
+                  login
+                  ... on User {
+                    name
+                  }
+                }
+                body
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -8,7 +8,7 @@ use ratatui::{
     widgets::{Block, Row, StatefulWidget, Table, TableState},
 };
 
-use super::PullRequest;
+use crate::types::PullRequest;
 
 #[derive(Debug, Default)]
 pub struct PullRequestsListState {
@@ -106,7 +106,7 @@ impl PullRequestsListState {
     fn find_by_index(&self, index: usize) -> Option<&PullRequest> {
         let mut current_index = 0;
 
-        for (_repo, prs) in self.grouped_prs.iter() {
+        for (_repo, prs) in self.filtered_prs.iter() {
             if current_index == index {
                 // Here we're returning none, since it matches a header row
                 return None;
@@ -148,8 +148,7 @@ impl PullRequestsListState {
                         .iter()
                         .filter(|pr| {
                             // Search in the line with the same format of the display
-                            let line_text =
-                                format!("#{} - {}", pr.id.to_lowercase(), pr.title.to_lowercase());
+                            let line_text = format!("#{} - {}", pr.number, pr.title.to_lowercase());
                             line_text.contains(&query.to_lowercase())
                         })
                         .cloned()
@@ -203,7 +202,7 @@ impl PullRequestsListState {
                 rows.push(Row::new([format!(
                     "  {} #{} - {}{}",
                     prefix,
-                    pr.id,
+                    pr.number,
                     if pr.is_draft { "✏️ " } else { "" },
                     pr.title
                 )]));

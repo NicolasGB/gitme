@@ -3,6 +3,8 @@ use ratatui::{
     widgets::{Block, block::Title},
 };
 
+use crate::types::User;
+
 /// Helper function to create a centered rect using percentages.
 /// Ensures the rectangle has a minimum size, taking up more relative space
 /// if the provided area is small.
@@ -37,4 +39,14 @@ pub fn block_with_title<'a>(title: impl Into<Title<'a>>) -> Block<'a> {
         .title(title)
         .borders(ratatui::widgets::Borders::ALL)
         .border_type(ratatui::widgets::BorderType::Rounded)
+}
+
+pub fn format_user(u: &User) -> String {
+    if !u.login.is_empty() && !u.name.is_empty() {
+        format!("{} ({})", u.name, u.login)
+    } else if !u.login.is_empty() {
+        u.login.clone()
+    } else {
+        u.name.clone()
+    }
 }
