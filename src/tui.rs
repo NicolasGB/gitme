@@ -115,7 +115,8 @@ impl App {
                     self.pull_requests.jump_up();
                 }
             }
-            KeyCode::Tab => self.pull_requests.next_tab(),
+            KeyCode::Char(']') => self.pull_requests.next_tab(),
+            KeyCode::Char('[') => self.pull_requests.previous_tab(),
             KeyCode::Char('/') => {
                 self.pull_requests.toggle_search();
                 self.input_mode = InputMode::Searching;

@@ -128,7 +128,6 @@ This project is licensed under the MIT License - see the [LICENSE.md](LICENSE) f
 - [x] Manage config(s) through CLI commands (Partially done)
 - [x] Migrate to Github's GQL API
 - [ ] Allow for user defined in GQL request to allow the user to adjust for API rate limits
-- [ ] Allow for user defined ticking to fetch data from Github
 - [ ] Copy pr links directly with `y` binding
 - [ ] Add review history in details view
 - [ ] Open repositories and not just PRs
