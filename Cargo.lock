@@ -828,6 +828,7 @@ dependencies = [
  "ratatui 0.29.0",
  "reqwest 0.12.15",
  "serde",
+ "serde_json",
  "textwrap",
  "tokio",
  "tokio-stream",

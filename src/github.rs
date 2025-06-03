@@ -100,18 +100,35 @@ impl GithubClient {
         };
         let body = RepositoryView::build_query(variables);
 
-        let reqwest_response: Response<ResponseData> = self
+        let response = self
             .0
             .post(GITHUB_URL)
             .json(&body)
             .send()
             .await
-            .wrap_err("Error requesting github api")?
+            .wrap_err("Error requesting github api")?;
+
+        // Check if we have an HTTP error status
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_default();
+
+            // Try to parse as GitHub API error format
+            if let Ok(github_error) = serde_json::from_str::<serde_json::Value>(&error_text) {
+                if let Some(message) = github_error.get("message").and_then(|m| m.as_str()) {
+                    bail!("[{}/{}] ({}): {}", owner, name, status, message);
+                }
+            }
+
+            bail!("[{}/{}] HTTP error {}: {}", owner, name, status, error_text);
+        }
+
+        let reqwest_response: Response<ResponseData> = response
             .json()
             .await
             .wrap_err("Could not unmarshal api response")?;
 
-        // If there's one or more errors return a string with all the messages
+        // Handle GraphQL errors (existing logic)
         if let Some(errors) = reqwest_response.errors {
             let errors = errors
                 .iter()

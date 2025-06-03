@@ -14,8 +14,8 @@ use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Layout, Position, Rect},
     style::{Color, Style, Stylize},
-    text::Line,
-    widgets::{Block, Cell, Paragraph, Row, Table, Widget, Wrap},
+    text::{Line, Text},
+    widgets::{Block, Cell, Paragraph, Row, Table, Widget},
 };
 use tui_input::{Input, backend::crossterm::EventHandler};
 
@@ -39,6 +39,7 @@ struct AppState {
     details: PullRequestsDetailsState,
 
     loading_state: LoadingState,
+    errors: Vec<String>,
     show_help: bool,
 
     searching: bool,
@@ -59,7 +60,7 @@ enum LoadingState {
     Idle,
     Loading,
     Loaded,
-    Error(String),
+    Error,
 }
 
 const KEYBINDINGS: &[(&str, &str)] = &[
@@ -108,7 +109,8 @@ impl PullRequestWidget {
 
     fn on_err(app_state: Arc<RwLock<AppState>>, err: Report) {
         //TODO: Improve this if multiple errors come they should be appended
-        Self::set_loading_state(app_state, LoadingState::Error(err.to_string()));
+        Self::set_loading_state(Arc::clone(&app_state), LoadingState::Error);
+        app_state.write().unwrap().errors.push(err.to_string());
     }
 
     async fn on_load(
@@ -423,8 +425,8 @@ impl Widget for &PullRequestWidget {
         if state.show_help {
             self.render_help_popup(area, buf); // area is the full screen for centering
         }
-        if let LoadingState::Error(ref msg) = state.loading_state {
-            self.render_error_popup(msg, area, buf); // area is the full screen for centering
+        if let LoadingState::Error = state.loading_state {
+            self.render_error_popup(state.errors.as_slice(), area, buf); // area is the full screen for centering
         }
     }
 }
@@ -526,7 +528,7 @@ impl PullRequestWidget {
                 LoadingState::Idle | LoadingState::Loaded => {
                     "Loaded ✔  ".green().into_right_aligned_line()
                 }
-                LoadingState::Error(_) => "Error ✗ ".red().into_right_aligned_line(),
+                LoadingState::Error => "Error ✗ ".red().into_right_aligned_line(),
             };
 
             let help_line = Line::from(
@@ -564,19 +566,35 @@ impl PullRequestWidget {
         ratatui::prelude::Widget::render(help_table, area, buf);
     }
 
-    fn render_error_popup(&self, err_msg: &str, screen_area: Rect, buf: &mut Buffer) {
+    fn render_error_popup(&self, err_msgs: &[String], screen_area: Rect, buf: &mut Buffer) {
         let popup_block = utils::block_with_title(" Errors ")
             .title_bottom(" q to quit ")
             .borders(ratatui::widgets::Borders::ALL)
             .border_style(Style::default().fg(Color::Red)); // Theming
 
-        let error_paragraph = Paragraph::new(err_msg.red()) // Use reference, apply style
-            .block(popup_block)
-            .centered()
-            .wrap(Wrap { trim: true });
+        let rows = err_msgs.iter().map(|err| {
+            Row::new([Cell::from(
+                Text::from(err.as_str()).alignment(ratatui::layout::Alignment::Center),
+            )
+            .red()])
+        });
 
-        let area = utils::centered_rect(screen_area, 30, 20, 30, 10); // Use the full screen_area for centering
+        let error_table = Table::new(rows, [Constraint::Percentage(100)])
+            .block(popup_block)
+            .column_spacing(2);
+
+        // Calculate dynamic size based on content
+        let max_msg_length = err_msgs.iter().map(|msg| msg.len() + 4).max().unwrap_or(20);
+
+        let num_errors = err_msgs.len().min(15); // Cap at 15 rows
+        let area = utils::centered_rect(
+            screen_area,
+            40,
+            20,
+            max_msg_length as u16,
+            num_errors as u16,
+        );
         ratatui::widgets::Clear.render(area, buf);
-        error_paragraph.render(area, buf);
+        error_table.render(area, buf);
     }
 }
